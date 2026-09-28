@@ -82,6 +82,16 @@ fn initialize(app_dir: &str, custom_client_config: &str) {
         // core_main's init_log does not work for flutter since it is only applied to its load_library in main.c
         hbb_common::init_log(false, "flutter_ffi");
     }
+    // Let the local audit log observe sign-in / sign-out. The hook is fired from
+    // hbb_common's LocalConfig when `user_info` is written or cleared; the writer
+    // itself lives in this crate so hbb_common does not have to depend on it.
+    hbb_common::set_audit_auth_hook(Box::new(|is_login| {
+        if is_login {
+            crate::audit_log::log_login();
+        } else {
+            crate::audit_log::log_logout();
+        }
+    }));
 }
 
 #[inline]
