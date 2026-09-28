@@ -82,16 +82,6 @@ fn initialize(app_dir: &str, custom_client_config: &str) {
         // core_main's init_log does not work for flutter since it is only applied to its load_library in main.c
         hbb_common::init_log(false, "flutter_ffi");
     }
-    // Let the local audit log observe sign-in / sign-out. The hook is fired from
-    // hbb_common's LocalConfig when `user_info` is written or cleared; the writer
-    // itself lives in this crate so hbb_common does not have to depend on it.
-    hbb_common::set_audit_auth_hook(Box::new(|is_login| {
-        if is_login {
-            crate::audit_log::log_login();
-        } else {
-            crate::audit_log::log_logout();
-        }
-    }));
 }
 
 #[inline]
@@ -1224,6 +1214,18 @@ pub fn main_set_env(key: String, value: Option<String>) -> SyncReturn<()> {
 }
 
 pub fn main_set_local_option(key: String, value: String) {
+    // Local audit log: the sign-in / sign-out HTTP calls happen on the Flutter
+    // side, so the only signal visible here is the persisted `user_info`
+    // option (written on sign-in, cleared on sign-out). Capture the previous
+    // value *before* the write, then re-read after it: LocalConfig::set_option
+    // may drop the key when a custom-client overwrite forbids saving, and the
+    // transition must be judged on the state that actually landed.
+    let audit_old_raw = if key == "user_info" {
+        Some(LocalConfig::get_option("user_info"))
+    } else {
+        None
+    };
+
     let is_texture_render_key = key.eq(keys::OPTION_TEXTURE_RENDER);
     let is_d3d_render_key = key.eq(keys::OPTION_ALLOW_D3D_RENDER);
     set_local_option(key, value.clone());
@@ -1246,6 +1248,23 @@ pub fn main_set_local_option(key: String, value: String) {
                 continue;
             }
             session.update_supported_decodings();
+        }
+    }
+    if let Some(old_raw) = audit_old_raw {
+        let new_empty = LocalConfig::get_option("user_info").trim().is_empty();
+        match (old_raw.trim().is_empty(), new_empty) {
+            // empty -> non-empty: a real sign-in. log_login() reads the
+            // freshly written `user_info` itself to pick up the account name.
+            (true, false) => crate::audit_log::log_login(),
+            // non-empty -> empty: sign-out. The store no longer holds the
+            // name, so parse the pre-write snapshot instead.
+            (false, true) => {
+                let account = crate::audit_log::account_name_from(&old_raw);
+                crate::audit_log::log_logout(&account);
+            }
+            // non-empty -> non-empty (periodic currentUser refresh, same-value
+            // rewrite) or empty -> empty: not a sign-in / sign-out event.
+            _ => {}
         }
     }
 }
