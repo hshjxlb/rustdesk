@@ -1001,6 +1001,7 @@ class _SafetyState extends State<_Safety> with AutomaticKeepAliveClientMixin {
                 if (!isChangeIdDisabled())
                   _Card(title: 'ID', children: [changeId()]),
                 more(context),
+                logging(context),
               ]),
             ),
           ],
@@ -1406,6 +1407,83 @@ class _SafetyState extends State<_Safety> with AutomaticKeepAliveClientMixin {
             'allow-only-conn-window-open',
             reverse: false, enabled: enabled),
       if (bind.mainIsInstalled() && !isUnlockPinDisabled()) unlockPin()
+    ]);
+  }
+
+  /// Local audit log: opt-in switch plus the file path to write to.
+  ///
+  /// Everything here is a *local* option (hence `isServer: false` on the
+  /// checkbox), so the values live in the client's own config and are read back
+  /// by the Rust side when it appends a record.
+  Widget logging(BuildContext context) {
+    bool enabled = !locked;
+    // Same shape as directIp() above: the controller is rebuilt from the stored
+    // option on each build, and the button only lights up once the text differs.
+    TextEditingController controller = TextEditingController();
+    RxBool applyEnabled = false.obs;
+
+    tmpWrapper() {
+      bool logOn = mainGetLocalBoolOptionSync(kOptionAllowAuditLog);
+      if (!logOn) applyEnabled.value = false;
+      // Only resync from the stored option while the field is untouched.
+      // Reassigning on every build (as directIp() does for its numeric port)
+      // would wipe a partly-typed path whenever an unrelated setState fires.
+      if (!applyEnabled.value) {
+        controller.text = bind.mainGetLocalOption(key: kOptionAuditLogPath);
+      }
+      return Offstage(
+        offstage: !logOn,
+        child: _SubLabeledWidget(
+          context,
+          'Log file path',
+          Row(children: [
+            SizedBox(
+              width: 240,
+              child: TextField(
+                controller: controller,
+                enabled: enabled && logOn,
+                onChanged: (_) => applyEnabled.value = true,
+                decoration: const InputDecoration(
+                  hintText: 'audit.log',
+                  contentPadding:
+                      EdgeInsets.symmetric(vertical: 12, horizontal: 12),
+                ),
+              ).workaroundFreezeLinuxMint().marginOnly(right: 15),
+            ),
+            Obx(() => ElevatedButton(
+                  onPressed: enabled && logOn && applyEnabled.value
+                      ? () async {
+                          applyEnabled.value = false;
+                          await bind.mainSetLocalOption(
+                              key: kOptionAuditLogPath, value: controller.text);
+                        }
+                      : null,
+                  child: Text(translate('Apply')),
+                )),
+            SizedBox(width: 10),
+            ElevatedButton(
+              onPressed: enabled && logOn
+                  ? () async {
+                      String? dir =
+                          await FilePicker.platform.getDirectoryPath();
+                      if (dir != null) {
+                        controller.text = dir;
+                        applyEnabled.value = true;
+                      }
+                    }
+                  : null,
+              child: Text(translate('Change')),
+            ),
+          ]),
+          enabled: enabled && logOn,
+        ),
+      );
+    }
+
+    return _Card(title: 'Logging', children: [
+      _OptionCheckBox(context, 'Enable logging', kOptionAllowAuditLog,
+          isServer: false, enabled: enabled, update: (_) => setState(() {})),
+      tmpWrapper(),
     ]);
   }
 
