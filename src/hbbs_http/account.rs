@@ -317,6 +317,11 @@ impl OidcSession {
                                 })
                                 .to_string(),
                             );
+                            // Local audit log: this OIDC branch writes the
+                            // local config directly from Rust and bypasses the
+                            // Flutter FFI layer, so the main_set_local_option
+                            // trigger never sees this write — fire LOGIN here.
+                            crate::audit_log::log_login();
                         }
                     }
                     session.set_state(LOGIN_ACCOUNT_AUTH, "".to_owned());
