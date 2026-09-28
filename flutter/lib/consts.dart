@@ -100,6 +100,11 @@ const String kOptionDirectServer = "direct-server";
 const String kOptionDirectAccessPort = "direct-access-port";
 const String kOptionAllowAutoDisconnect = "allow-auto-disconnect";
 const String kOptionAutoDisconnectTimeout = "auto-disconnect-timeout";
+// Local audit log (Settings - Security - Logging). The "allow-" prefix makes the
+// checkbox default to off: option2bool() only treats "allow-*" as true when the
+// stored value is exactly "Y".
+const String kOptionAllowAuditLog = "allow-audit-log";
+const String kOptionAuditLogPath = "audit-log-path";
 const String kOptionEnableHwcodec = "enable-hwcodec";
 const String kOptionAllowAutoRecordIncoming = "allow-auto-record-incoming";
 const String kOptionAllowAutoRecordOutgoing = "allow-auto-record-outgoing";
