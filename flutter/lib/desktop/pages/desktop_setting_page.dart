@@ -1423,13 +1423,16 @@ class _SafetyState extends State<_Safety> with AutomaticKeepAliveClientMixin {
     RxBool applyEnabled = false.obs;
 
     tmpWrapper() {
-      bool logOn = mainGetLocalBoolOptionSync(kOptionAllowAuditLog);
+      // Machine-level option (Config + IPC sync), NOT the local store: the
+      // switch and the path are read by the SYSTEM service that handles
+      // inbound connections, which cannot see LocalConfig.
+      bool logOn = mainGetBoolOptionSync(kOptionAllowAuditLog);
       if (!logOn) applyEnabled.value = false;
       // Only resync from the stored option while the field is untouched.
       // Reassigning on every build (as directIp() does for its numeric port)
       // would wipe a partly-typed path whenever an unrelated setState fires.
       if (!applyEnabled.value) {
-        controller.text = bind.mainGetLocalOption(key: kOptionAuditLogPath);
+        controller.text = bind.mainGetOptionSync(key: kOptionAuditLogPath);
       }
       return Offstage(
         offstage: !logOn,
@@ -1454,7 +1457,7 @@ class _SafetyState extends State<_Safety> with AutomaticKeepAliveClientMixin {
                   onPressed: enabled && logOn && applyEnabled.value
                       ? () async {
                           applyEnabled.value = false;
-                          await bind.mainSetLocalOption(
+                          await bind.mainSetOption(
                               key: kOptionAuditLogPath, value: controller.text);
                         }
                       : null,
@@ -1481,8 +1484,11 @@ class _SafetyState extends State<_Safety> with AutomaticKeepAliveClientMixin {
     }
 
     return _Card(title: 'Logging', children: [
+      // isServer defaults to true: mainGetBoolOptionSync / mainSetBoolOption
+      // keep the flag in the machine-level Config store (synced to the SYSTEM
+      // service via IPC). The local store would be invisible to the service.
       _OptionCheckBox(context, 'Enable logging', kOptionAllowAuditLog,
-          isServer: false, enabled: enabled, update: (_) => setState(() {})),
+          enabled: enabled, update: (_) => setState(() {})),
       tmpWrapper(),
     ]);
   }

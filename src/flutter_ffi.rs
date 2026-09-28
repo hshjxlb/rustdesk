@@ -967,6 +967,12 @@ pub fn main_get_error() -> String {
 }
 
 pub fn main_set_option(key: String, value: String) {
+    // Local audit log: turning the switch on pre-creates the file (immediate
+    // feedback in the UI, and on Windows the UI process becomes the file's
+    // CREATOR OWNER so the SYSTEM service can always append to it later).
+    if key == crate::audit_log::OPTION_ALLOW_AUDIT_LOG {
+        crate::audit_log::note_switch(&value);
+    }
     #[cfg(target_os = "android")]
     {
         let is_permission_option = key.eq(keys::OPTION_ENABLE_CLIPBOARD)
@@ -1271,6 +1277,19 @@ pub fn main_set_local_option(key: String, value: String) {
             // rewrite) or empty -> empty: not a sign-in / sign-out event.
             _ => {}
         }
+        // Mirror the signed-in account into the machine-level Config store
+        // and the service process. The inbound-connection hooks run inside
+        // the SYSTEM service, which cannot see this process's LocalConfig
+        // (nor a `user_info` that was never persisted, e.g. OIDC without
+        // "remember me"), so the snapshot they stamp comes from the mirror.
+        // Pushed on EVERY user_info write — sign-in, sign-out, periodic
+        // refresh — so it can never go stale; an empty value clears it.
+        let mirrored = if new_empty {
+            String::new()
+        } else {
+            crate::audit_log::account_name_from(&LocalConfig::get_option("user_info"))
+        };
+        crate::audit_log::sync_account(&mirrored);
     }
 }
 

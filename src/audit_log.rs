@@ -15,15 +15,21 @@
 //!
 //! ```text
 //! 2026-09-28 10:09:25 | LOGIN | user=admin | device_id=123456789
-//! 2026-09-28 10:21:03 | CONNECT_IN | peer=987654321 | type=remote
-//! 2026-09-28 10:35:41 | DISCONNECT_IN | peer=987654321 | type=remote | duration=00:14:38
+//! 2026-09-28 10:21:03 | CONNECT_IN | peer=987654321 | type=remote | user=admin
+//! 2026-09-28 10:35:41 | DISCONNECT_IN | peer=987654321 | type=remote | user=admin | duration=00:14:38
 //! 2026-09-28 11:02:10 | LOGOUT | user=admin | device_id=123456789
 //! ```
+//!
+//! Storage: the switch, the path and the mirrored account name live in the
+//! **machine-level** `Config` store, never in `LocalConfig`. On Windows the
+//! inbound-connection hooks run inside the SYSTEM service, whose config dir
+//! is remapped by hbb_common's `patch()` to `ServiceProfiles\LocalService` —
+//! a `LocalConfig` flag ticked in the UI process would be invisible there,
+//! and a `user_info` sign-in would be unknown there. `Config` + the
+//! `ipc::set_options` round trip (the same channel upstream uses for
+//! `direct-server`, `access-mode`, ...) keeps both processes in agreement.
 
-use hbb_common::{
-    config::{Config, LocalConfig},
-    log,
-};
+use hbb_common::{config::Config, log};
 use std::{
     fs::{self, OpenOptions},
     io::Write,
@@ -34,10 +40,21 @@ use std::{
 /// `option2bool()` treat `allow-*` as FALSE unless the stored value is exactly
 /// "Y", so an unset option means "logging off". An `enable-*` key would default
 /// to ON, which is the opposite of what an audit log should do.
+///
+/// Stored in the machine-level `Config` store (not `LocalConfig`): the flag is
+/// read by the SYSTEM service, which has a separate per-process local store.
 pub const OPTION_ALLOW_AUDIT_LOG: &str = "allow-audit-log";
 
 /// Where to write. Empty means "use the default location".
+///
+/// Machine-level `Config` store, for the same reason as the switch: both the
+/// UI process and the SYSTEM service resolve the file, and they must agree.
 pub const OPTION_AUDIT_LOG_PATH: &str = "audit-log-path";
+
+/// Mirror of the API account signed in on this machine, for stamping
+/// connection lines written by the service. Maintained by `sync_account()`
+/// from the UI process; empty means "nobody is signed in".
+pub const OPTION_AUDIT_ACCOUNT: &str = "audit-account";
 
 /// Default file name when no path is configured, and when the configured value
 /// points at a directory.
@@ -53,7 +70,7 @@ const MAX_FILE_SIZE: u64 = 10 * 1024 * 1024;
 /// any I/O at all.
 #[inline]
 pub fn is_enabled() -> bool {
-    LocalConfig::get_bool_option(OPTION_ALLOW_AUDIT_LOG)
+    Config::get_bool_option(OPTION_ALLOW_AUDIT_LOG)
 }
 
 /// Resolve the file to append to.
@@ -61,12 +78,12 @@ pub fn is_enabled() -> bool {
 /// A configured value is used as-is; if it looks like a directory (trailing
 /// separator, or it already exists as one) the default file name is appended, so
 /// both "D:\logs" and "D:\logs\audit.log" do what the user meant. An empty
-/// configured value falls back to the per-user data directory.
+/// configured value falls back to the default location (see `default_path`).
 pub fn resolve_path() -> PathBuf {
-    let configured = LocalConfig::get_option(OPTION_AUDIT_LOG_PATH);
+    let configured = Config::get_option(OPTION_AUDIT_LOG_PATH);
     let trimmed = configured.trim();
     if trimmed.is_empty() {
-        return Config::path(DEFAULT_FILE_NAME);
+        return default_path();
     }
     let path = PathBuf::from(trimmed);
     let looks_like_dir = trimmed.ends_with('/')
@@ -76,6 +93,29 @@ pub fn resolve_path() -> PathBuf {
         path.join(DEFAULT_FILE_NAME)
     } else {
         path
+    }
+}
+
+/// The fallback file. On Windows this deliberately does NOT use
+/// `Config::path()`: that applies hbb_common's `patch()`, which would resolve
+/// to `ServiceProfiles\LocalService\...` inside the service but to the user's
+/// `%APPDATA%` in the UI process — two different files for the same log. A
+/// fixed machine-wide location is writable by both (SYSTEM always is; the UI
+/// pre-creates the file via `ensure_file()`, which makes it the CREATOR OWNER
+/// with full rights, and SYSTEM keeps full access through inherited ACEs).
+#[inline]
+fn default_path() -> PathBuf {
+    #[cfg(windows)]
+    {
+        std::env::var_os("PROGRAMDATA")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("C:\\ProgramData"))
+            .join("RustDesk")
+            .join(DEFAULT_FILE_NAME)
+    }
+    #[cfg(not(windows))]
+    {
+        Config::path(DEFAULT_FILE_NAME)
     }
 }
 
@@ -148,6 +188,36 @@ fn spawn_line(event: String) {
     std::thread::spawn(move || write_line(&event));
 }
 
+/// Called from the FFI layer when the user changes the "Enable logging"
+/// switch. Turning it ON pre-creates the directory and an empty file right
+/// away: the user sees the file appear the moment they tick the box (instead
+/// of only after the first event), and — on Windows — the UI process becomes
+/// the file's CREATOR OWNER, so both the user account and the SYSTEM service
+/// can append to it regardless of which process writes first.
+pub fn note_switch(raw_value: &str) {
+    if hbb_common::config::option2bool(OPTION_ALLOW_AUDIT_LOG, raw_value) {
+        ensure_file();
+    }
+}
+
+/// Best-effort pre-creation of the log file. Never fatal.
+pub fn ensure_file() {
+    let path = resolve_path();
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            if let Err(e) = fs::create_dir_all(parent) {
+                log::warn!("audit_log: cannot create directory {:?}: {}", parent, e);
+                return;
+            }
+        }
+    }
+    if fs::metadata(&path).is_err() {
+        if let Err(e) = OpenOptions::new().create(true).append(true).open(&path) {
+            log::warn!("audit_log: cannot pre-create {:?}: {}", path, e);
+        }
+    }
+}
+
 /// Extract the account name from a raw `user_info` JSON string.
 ///
 /// Public because the FFI sign-out path must parse the *pre-write* snapshot:
@@ -182,13 +252,45 @@ fn clean_account(name: &str) -> String {
 /// connection lines. `none` when no one is logged in — connections are
 /// recorded regardless of sign-in state, so the field makes the state at
 /// connection time explicit instead of leaving it to be guessed.
+///
+/// Reads the `audit-account` mirror, NOT `user_info`: this runs inside the
+/// SYSTEM service on Windows, whose `LocalConfig` is a separate store that
+/// never receives the UI's sign-in state (and stays empty for OIDC sign-ins
+/// that skip "remember me" anyway).
 pub fn current_account() -> String {
-    let name = account_name_from(&LocalConfig::get_option("user_info"));
-    if name == "unknown" {
+    let name = Config::get_option(OPTION_AUDIT_ACCOUNT);
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
         "none".to_owned()
     } else {
-        name
+        trimmed.to_owned()
     }
+}
+
+/// Push the signed-in account name into the machine-level `Config` store and
+/// the service process. The service stamps CONNECT_IN / DISCONNECT_IN lines
+/// with the mirror (see `current_account`); it cannot see this process's
+/// `LocalConfig`, so the mirror is the only channel.
+///
+/// `ipc::set_option` writes our own `Config` copy AND the service's in one
+/// call, and degrades gracefully to local-only when no service is installed
+/// (portable mode, where the UI process runs the server itself anyway).
+/// An empty string clears the mirror (sign-out).
+///
+/// Fire-and-forget on a detached thread: the IPC round trips must never stall
+/// the settings write or the login path that triggered the mirror.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+pub fn sync_account(account: &str) {
+    let account = account.trim().to_owned();
+    std::thread::spawn(move || {
+        crate::ipc::set_option(OPTION_AUDIT_ACCOUNT, &account);
+    });
+}
+
+/// Mobile single-process variant: no service, no IPC — write the mirror directly.
+#[cfg(any(target_os = "android", target_os = "ios"))]
+pub fn sync_account(account: &str) {
+    Config::set_option(OPTION_AUDIT_ACCOUNT.to_owned(), account.trim().to_owned());
 }
 
 /// Record that a user signed in to the API server.

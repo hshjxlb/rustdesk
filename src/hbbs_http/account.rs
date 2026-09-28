@@ -328,6 +328,13 @@ impl OidcSession {
                         // because user_info is not written when remember_me
                         // is off.
                         crate::audit_log::log_login(&auth_body.user.name);
+                        // Mirror the account for the connection-log snapshot:
+                        // inbound connections are stamped by the SYSTEM
+                        // service, which cannot see LocalConfig — and
+                        // `user_info` was not persisted at all when
+                        // "remember me" is off. Thread-detached IPC, safe to
+                        // fire from this async context.
+                        crate::audit_log::sync_account(&auth_body.user.name);
                     }
                     session.set_state(LOGIN_ACCOUNT_AUTH, "".to_owned());
                     session.auth_body = Some(auth_body);
