@@ -416,6 +416,9 @@ pub struct Connection {
     login_scope: Option<[u8; 32]>,
     peer_argb: u32,
     session_last_recv_time: Option<Arc<Mutex<Instant>>>,
+    // When this inbound connection became authorized. Drives the duration in
+    // the local audit log; set once, at the point the peer is let in.
+    audit_connected_at: Option<Instant>,
     chat_unanswered: bool,
     file_transferred: bool,
     #[cfg(windows)]
@@ -621,6 +624,7 @@ impl Connection {
             login_scope: None,
             peer_argb: 0u32,
             session_last_recv_time: None,
+            audit_connected_at: None,
             chat_unanswered: false,
             file_transferred: false,
             #[cfg(windows)]
@@ -1222,6 +1226,16 @@ impl Connection {
         conn.post_conn_audit(json!({
             "action": "close",
         }));
+        // Local audit log: close out the entry opened at authorization. Uses the
+        // same "loop exited" moment as the upload above, and takes the stored
+        // instant so a reconnect (which re-runs the loop) cannot log twice.
+        if let Some(started) = conn.audit_connected_at.take() {
+            crate::audit_log::log_incoming_disconnect(
+                &conn.lr.my_id,
+                crate::audit_log::conn_type_label(conn.audit_conn_type_label()),
+                &crate::audit_log::format_duration(started.elapsed()),
+            );
+        }
         if let Some(s) = conn.server.upgrade() {
             let mut s = s.write().unwrap();
             s.remove_connection(&conn.inner);
@@ -1555,6 +1569,22 @@ impl Connection {
         // Unique per record; the api server dedups retried posts by it.
         v["nonce"] = json!(uuid::Uuid::new_v4().to_string());
         allow_err!(self.tx_post_seq.send((url, v)));
+    }
+
+    /// Session scope of this connection as a bare label for the local audit log.
+    /// Mirrors the numeric mapping used by the `type` field of the conn audit.
+    fn audit_conn_type_label(&self) -> &'static str {
+        if self.file_transfer.is_some() {
+            "file_transfer"
+        } else if self.is_port_forward() {
+            "port_forward"
+        } else if self.view_camera {
+            "view_camera"
+        } else if self.terminal {
+            "terminal"
+        } else {
+            "remote"
+        }
     }
 
     fn get_files_for_audit(job_type: fs::JobType, mut files: Vec<FileEntry>) -> Vec<(String, i64)> {
@@ -1924,6 +1954,14 @@ impl Connection {
             audit["two_factor"] = json!(self.conn_audit_two_factor.as_i64());
         }
         self.post_conn_audit(audit);
+        // Local audit log: an authorized inbound connection. Recorded here
+        // rather than at TCP accept so the entry means "a peer was let in",
+        // matching the semantics of the `new` upload above.
+        self.audit_connected_at = Some(Instant::now());
+        crate::audit_log::log_incoming_connect(
+            &self.lr.my_id,
+            crate::audit_log::conn_type_label(self.audit_conn_type_label()),
+        );
         #[allow(unused_mut)]
         let mut username = crate::platform::get_active_username();
         let mut res = LoginResponse::new();
