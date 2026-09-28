@@ -1253,9 +1253,14 @@ pub fn main_set_local_option(key: String, value: String) {
     if let Some(old_raw) = audit_old_raw {
         let new_empty = LocalConfig::get_option("user_info").trim().is_empty();
         match (old_raw.trim().is_empty(), new_empty) {
-            // empty -> non-empty: a real sign-in. log_login() reads the
-            // freshly written `user_info` itself to pick up the account name.
-            (true, false) => crate::audit_log::log_login(),
+            // empty -> non-empty: a real sign-in. Parse the name from the
+            // freshly written `user_info` and pass it in, symmetric with the
+            // sign-out branch.
+            (true, false) => {
+                let raw = LocalConfig::get_option("user_info");
+                let account = crate::audit_log::account_name_from(&raw);
+                crate::audit_log::log_login(&account);
+            }
             // non-empty -> empty: sign-out. The store no longer holds the
             // name, so parse the pre-write snapshot instead.
             (false, true) => {

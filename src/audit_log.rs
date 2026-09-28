@@ -168,20 +168,39 @@ pub fn account_name_from(raw: &str) -> String {
         .unwrap_or_else(|| "unknown".to_owned())
 }
 
-/// Account name of the signed-in API user, or `unknown`.
-///
-/// Rust never sees the `/api/login` response (that request is made by the
-/// Flutter side), but the Dart code persists the user payload as the
-/// `user_info` local option, so we read it back from there.
-fn account_name() -> String {
-    account_name_from(&LocalConfig::get_option("user_info"))
+/// Trim a caller-supplied account name, defaulting to `unknown` when empty.
+fn clean_account(name: &str) -> String {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        "unknown".to_owned()
+    } else {
+        trimmed.to_owned()
+    }
+}
+
+/// The API account signed in on this machine right now, for stamping
+/// connection lines. `none` when no one is logged in — connections are
+/// recorded regardless of sign-in state, so the field makes the state at
+/// connection time explicit instead of leaving it to be guessed.
+pub fn current_account() -> String {
+    let name = account_name_from(&LocalConfig::get_option("user_info"));
+    if name == "unknown" {
+        "none".to_owned()
+    } else {
+        name
+    }
 }
 
 /// Record that a user signed in to the API server.
-pub fn log_login() {
+///
+/// The caller supplies the name. The FFI sign-in path re-reads the freshly
+/// written `user_info` and parses it with `account_name_from`; the OIDC path
+/// takes the name straight from the auth response, which also covers the
+/// "don't remember me" case where `user_info` is never persisted.
+pub fn log_login(account: &str) {
     let event = format!(
         "LOGIN | user={} | device_id={}",
-        account_name(),
+        clean_account(account),
         Config::get_id()
     );
     spawn_line(event);
@@ -195,28 +214,34 @@ pub fn log_login() {
 pub fn log_logout(account: &str) {
     let event = format!(
         "LOGOUT | user={} | device_id={}",
-        account,
+        clean_account(account),
         Config::get_id()
     );
     spawn_line(event);
 }
 
 /// Record an inbound connection to this machine (we are the controlled side).
-/// `peer_id` is the controlling machine's id.
-pub fn log_incoming_connect(peer_id: &str, conn_type: &str) {
+/// `peer_id` is the controlling machine's id; `account` is the API account
+/// signed in here at the moment the peer was let in (`none` if not signed in).
+pub fn log_incoming_connect(peer_id: &str, conn_type: &str, account: &str) {
     let event = format!(
-        "CONNECT_IN | peer={} | type={}",
-        peer_id, conn_type
+        "CONNECT_IN | peer={} | type={} | user={}",
+        peer_id,
+        conn_type,
+        clean_account(account)
     );
     spawn_line(event);
 }
 
 /// Record that an inbound connection ended, including how long it lasted.
-pub fn log_incoming_disconnect(peer_id: &str, conn_type: &str, duration: &str) {
+/// `account` is the snapshot taken at connect time, so the two lines for one
+/// session always show the same user even if the sign-in changed meanwhile.
+pub fn log_incoming_disconnect(peer_id: &str, conn_type: &str, duration: &str, account: &str) {
     let event = format!(
-        "DISCONNECT_IN | peer={} | type={} | duration={} | at={}",
+        "DISCONNECT_IN | peer={} | type={} | user={} | duration={} | at={}",
         peer_id,
         conn_type,
+        clean_account(account),
         duration,
         now_string()
     );

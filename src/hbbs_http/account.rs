@@ -317,12 +317,17 @@ impl OidcSession {
                                 })
                                 .to_string(),
                             );
-                            // Local audit log: this OIDC branch writes the
-                            // local config directly from Rust and bypasses the
-                            // Flutter FFI layer, so the main_set_local_option
-                            // trigger never sees this write — fire LOGIN here.
-                            crate::audit_log::log_login();
                         }
+                        // Local audit log: this OIDC branch completes the
+                        // sign-in inside Rust and never goes through the
+                        // Flutter FFI layer, so the main_set_local_option
+                        // transition check cannot see it — fire LOGIN here.
+                        // Fires regardless of "remember me": the sign-in
+                        // happened either way and only the persistence
+                        // differs. The name comes from the auth response
+                        // because user_info is not written when remember_me
+                        // is off.
+                        crate::audit_log::log_login(&auth_body.user.name);
                     }
                     session.set_state(LOGIN_ACCOUNT_AUTH, "".to_owned());
                     session.auth_body = Some(auth_body);
