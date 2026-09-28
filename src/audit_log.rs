@@ -148,17 +148,16 @@ fn spawn_line(event: String) {
     std::thread::spawn(move || write_line(&event));
 }
 
-/// Account name of the signed-in API user, or `unknown`.
+/// Extract the account name from a raw `user_info` JSON string.
 ///
-/// Rust never sees the `/api/login` response (that request is made by the
-/// Flutter side), but the Dart code persists the user payload as the
-/// `user_info` local option, so we read it back from there.
-fn account_name() -> String {
-    let raw = LocalConfig::get_option("user_info");
+/// Public because the FFI sign-out path must parse the *pre-write* snapshot:
+/// by the time a LOGOUT event fires the `user_info` option has already been
+/// cleared. Empty input or a parse failure falls back to `unknown`.
+pub fn account_name_from(raw: &str) -> String {
     if raw.trim().is_empty() {
         return "unknown".to_owned();
     }
-    serde_json::from_str::<serde_json::Value>(&raw)
+    serde_json::from_str::<serde_json::Value>(raw)
         .ok()
         .and_then(|v| {
             v.get("name")
@@ -167,6 +166,15 @@ fn account_name() -> String {
         })
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "unknown".to_owned())
+}
+
+/// Account name of the signed-in API user, or `unknown`.
+///
+/// Rust never sees the `/api/login` response (that request is made by the
+/// Flutter side), but the Dart code persists the user payload as the
+/// `user_info` local option, so we read it back from there.
+fn account_name() -> String {
+    account_name_from(&LocalConfig::get_option("user_info"))
 }
 
 /// Record that a user signed in to the API server.
@@ -180,10 +188,14 @@ pub fn log_login() {
 }
 
 /// Record that a user signed out of the API server.
-pub fn log_logout() {
+///
+/// The caller supplies the name: for the FFI sign-out path the `user_info`
+/// option is already cleared when we run, so the caller passes the name
+/// parsed from the pre-write snapshot via `account_name_from(old_raw)`.
+pub fn log_logout(account: &str) {
     let event = format!(
         "LOGOUT | user={} | device_id={}",
-        account_name(),
+        account,
         Config::get_id()
     );
     spawn_line(event);
