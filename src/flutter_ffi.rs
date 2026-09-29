@@ -1269,20 +1269,43 @@ pub fn main_set_local_option(key: String, value: String) {
         match (old_raw.trim().is_empty(), new_empty) {
             // empty -> non-empty: a real sign-in. Parse the name from the
             // freshly written `user_info` and pass it in, symmetric with the
-            // sign-out branch.
+            // sign-out branch. A pending explicit-sign-out mark is dropped
+            // here: its reset() found `user_info` already empty and will
+            // never fire the (non-empty -> empty) transition it waited for.
             (true, false) => {
+                crate::audit_log::take_explicit_logout();
                 let raw = LocalConfig::get_option("user_info");
                 let account = crate::audit_log::account_name_from(&raw);
                 crate::audit_log::log_login(&account);
             }
-            // non-empty -> empty: the store was cleared. This is only a
-            // fallback sign-out signal: Flutter's logOut() also calls
-            // main_audit_logout() explicitly, so recording here as well would
-            // duplicate the line. The mirror sync below still runs, which is
-            // what clears the account stamped on later inbound connections.
-            (false, true) => {}
-            // non-empty -> non-empty (periodic currentUser refresh, same-value
-            // rewrite) or empty -> empty: not a sign-in / sign-out event.
+            // non-empty -> empty: the store was cleared. The explicit Dart
+            // sign-out logged its LOGOUT line and marked this echo (v10) --
+            // every OTHER path that clears user_info goes through here
+            // WITHOUT any sign-out call: the 401 auto reset in
+            // refreshCurrentUser and the ab/group model resets. Record the
+            // account from the pre-write snapshot for those.
+            (false, true) => {
+                if !crate::audit_log::take_explicit_logout() {
+                    let old_account = crate::audit_log::account_name_from(&old_raw);
+                    crate::audit_log::log_logout(&old_account);
+                }
+            }
+            // non-empty -> non-empty: the periodic currentUser refresh
+            // rewrites the SAME account, which is not an event. A NAME
+            // CHANGE is a re-login without signing out first (the login page
+            // overwrites user_info directly): the old identity's session
+            // ended and a new one began -- record both, in order.
+            (false, false) => {
+                let old_account = crate::audit_log::account_name_from(&old_raw);
+                let new_account = crate::audit_log::account_name_from(&LocalConfig::get_option("user_info"));
+                if old_account != new_account
+                    && old_account != "unknown"
+                    && new_account != "unknown"
+                {
+                    crate::audit_log::log_switch(&old_account, &new_account);
+                }
+            }
+            // empty -> empty: not a sign-in / sign-out event.
             _ => {}
         }
         // Mirror the signed-in account into the machine-level Config store
@@ -1313,6 +1336,9 @@ pub fn main_set_local_option(key: String, value: String) {
 /// it has none).
 pub fn main_audit_logout(account: String) {
     crate::audit_log::log_logout(&account);
+    // The LOGOUT line is written; the reset() that always follows will clear
+    // `user_info` and must not log the same sign-out again (v10).
+    crate::audit_log::mark_explicit_logout();
     // The session is over: clear the mirror so inbound connections admitted
     // after this point are not stamped with the previous account.
     crate::audit_log::sync_account("");

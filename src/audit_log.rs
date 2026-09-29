@@ -373,6 +373,52 @@ pub fn log_logout(account: &str) {
     spawn_line(event);
 }
 
+/// Record an account switch (re-login as someone else without an explicit
+/// sign-out first): the previous identity's session ended and a new one
+/// began. Both lines are written from ONE detached thread so they cannot
+/// interleave with each other or swap their order.
+pub fn log_switch(old_account: &str, new_account: &str) {
+    let logout = format!(
+        "LOGOUT | user={} | device_id={}",
+        clean_account(old_account),
+        Config::get_id()
+    );
+    let login = format!(
+        "LOGIN | user={} | device_id={}",
+        clean_account(new_account),
+        Config::get_id()
+    );
+    std::thread::spawn(move || {
+        write_line(&logout);
+        write_line(&login);
+    });
+}
+
+/// Marked by the explicit Dart sign-out (`main_audit_logout`) right after it
+/// wrote its LOGOUT line. The `reset()` that always follows clears
+/// `user_info`, and the resulting (non-empty -> empty) transition must not
+/// log the same sign-out twice. Process-local on purpose: both sides run in
+/// the UI process.
+static EXPLICIT_LOGOUT_PENDING: std::sync::Mutex<bool> = std::sync::Mutex::new(false);
+
+/// Remember that a LOGOUT line was just written by the explicit sign-out and
+/// its `user_info` clear is still pending.
+pub fn mark_explicit_logout() {
+    if let Ok(mut pending) = EXPLICIT_LOGOUT_PENDING.lock() {
+        *pending = true;
+    }
+}
+
+/// Consume the pending mark. Returns true when the (non-empty -> empty)
+/// `user_info` transition being processed is just the echo of the explicit
+/// sign-out, which already recorded its LOGOUT line.
+pub fn take_explicit_logout() -> bool {
+    EXPLICIT_LOGOUT_PENDING
+        .lock()
+        .map(|mut pending| std::mem::take(&mut *pending))
+        .unwrap_or(false)
+}
+
 /// Record an inbound connection to this machine (we are the controlled side).
 /// `peer_name` is the name the CONTROLLING side presents (its LoginRequest
 /// `my_name` — the same name the accept dialog shows), stamped as `user=` so
