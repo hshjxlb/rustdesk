@@ -400,6 +400,8 @@ class FfiModel with ChangeNotifier {
         parent.target?.fileModel.jobController.updateFolderFiles(evt);
       } else if (name == 'add_connection') {
         parent.target?.serverModel.addConnection(evt);
+      } else if (name == 'remote_sessions') {
+        _updateRemoteSessions(evt);
       } else if (name == 'on_client_remove') {
         parent.target?.serverModel.onClientRemove(evt);
       } else if (name == 'update_quality_status') {
@@ -4424,4 +4426,21 @@ Future<void> initializeCursorAndCanvas(FFI ffi) async {
 
 clearWaitingForImage(OverlayDialogManager? dialogManager, SessionID sessionId) {
   dialogManager?.dismissByTag('$sessionId-waiting-for-image');
+}
+
+/// Handle the "remote_sessions" global event pushed by the Rust side: the list
+/// of peers currently controlling this machine. Replaces the whole list, since
+/// Rust already sends a full snapshot and only when it actually changed.
+void _updateRemoteSessions(Map<String, dynamic> evt) {
+  try {
+    final raw = evt['list'];
+    if (raw is! List) return;
+    final sessions = raw
+        .whereType<Map>()
+        .map((e) => RemoteSession.fromJson(Map<String, dynamic>.from(e)))
+        .toList();
+    stateGlobal.remoteSessions.value = sessions;
+  } catch (e) {
+    debugPrint("Failed to parse remote_sessions event: $e");
+  }
 }

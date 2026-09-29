@@ -84,6 +84,11 @@ lazy_static::lazy_static! {
 #[cfg(target_os = "windows")]
 lazy_static::lazy_static! {
     pub static ref IS_FILE_TRANSFER_ENABLED: Arc<Mutex<Option<bool>>> = Arc::new(Mutex::new(None));
+    /// Last known set of authorized inbound connections, refreshed by
+    /// `check_connect_status_` once a second. Drives the status icon badge and
+    /// (via a pushed global event) the Flutter side.
+    pub static ref REMOTE_SESSIONS: Arc<Mutex<Vec<(String, String, String, String)>>> =
+        Arc::new(Mutex::new(Vec::new()));
 }
 
 const INIT_ASYNC_JOB_STATUS: &str = " ";
@@ -1415,6 +1420,41 @@ async fn check_connect_status_(reconnect: bool, rx: mpsc::UnboundedReceiver<ipc:
                                 *IS_REMOTE_MODIFY_ENABLED_BY_CONTROL_PERMISSIONS.lock().unwrap() = v;
                             }
                             #[cfg(target_os = "windows")]
+                            Ok(Some(ipc::Data::ControlledSessionDetail(list))) => {
+                                let changed = {
+                                    let mut cur = REMOTE_SESSIONS.lock().unwrap();
+                                    if *cur != list {
+                                        *cur = list.clone();
+                                        true
+                                    } else {
+                                        false
+                                    }
+                                };
+                                // Only forward when it actually changed, so we
+                                // don't rebuild the Flutter toolbar every second.
+                                #[cfg(feature = "flutter")]
+                                if changed {
+                                    crate::flutter::push_global_event(
+                                        crate::flutter::APP_TYPE_MAIN,
+                                        serde_json::json!({
+                                            "name": "remote_sessions",
+                                            "list": list
+                                                .iter()
+                                                .map(|(id, name, ip, conn_type)| serde_json::json!({
+                                                    "peer_id": id,
+                                                    "peer_name": name,
+                                                    "ip": ip,
+                                                    "conn_type": conn_type,
+                                                }))
+                                                .collect::<Vec<_>>(),
+                                        })
+                                        .to_string(),
+                                    );
+                                }
+                                #[cfg(not(feature = "flutter"))]
+                                let _ = changed;
+                            }
+                            #[cfg(target_os = "windows")]
                             Ok(Some(ipc::Data::FileTransferEnabledState(v))) => {
                                 if let Some(enabled) = v {
                                     let mut lock = IS_FILE_TRANSFER_ENABLED.lock().unwrap();
@@ -1440,6 +1480,8 @@ async fn check_connect_status_(reconnect: bool, rx: mpsc::UnboundedReceiver<ipc:
                         c.send(&ipc::Data::ControlPermissionsRemoteModify(None)).await.ok();
                         #[cfg(target_os = "windows")]
                         c.send(&ipc::Data::FileTransferEnabledState(None)).await.ok();
+                        #[cfg(target_os = "windows")]
+                        c.send(&ipc::Data::ControlledSessionDetail(vec![])).await.ok();
                     }
                 }
             }

@@ -3237,6 +3237,88 @@ Widget unreadTopRightBuilder(RxInt? count, {Widget? icon}) {
   );
 }
 
+/// Toolbar icon showing whether anyone is remotely controlling this machine.
+///
+/// No badge + grey icon when nobody is connected; a red badge with the peer
+/// count when one or more peers are. Tap/double-tap is wired by the caller.
+Widget remoteIncomingIconBuilder(RxList<RemoteSession> sessions,
+    {VoidCallback? onTap}) {
+  return Obx(() {
+    final count = sessions.length;
+    final active = count > 0;
+    final iconColor = active
+        ? MyTheme.button
+        : Theme.of(Get.context!).textTheme.titleLarge?.color?.withOpacity(0.5);
+    final icon = Stack(
+      clipBehavior: Clip.none,
+      children: [
+        Icon(Icons.desktop_windows_outlined, size: 20, color: iconColor),
+        if (active)
+          Positioned(
+              top: -2,
+              right: -4,
+              child: unreadMessageCountBuilder(
+                  RxInt(count), size: 13, fontSize: 8)),
+      ],
+    );
+    final tooltip = active
+        ? '${translate("Remote access")}: $count'
+        : translate("No remote access");
+    return Tooltip(
+      message: tooltip,
+      child: InkWell(
+        onTap: onTap,
+        child: icon.paddingSymmetric(horizontal: 4),
+      ),
+    );
+  });
+}
+
+/// Dialog listing who is currently controlling this machine: name + IP.
+void showRemoteSessionsDialog(BuildContext context) {
+  final sessions = stateGlobal.remoteSessions;
+  showDialog(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: Text(translate('Peers controlling this device')),
+      content: Obx(() {
+        final list = sessions.toList();
+        if (list.isEmpty) {
+          return SizedBox(
+            width: 360,
+            child: Text(translate('No one is controlling this device')),
+          );
+        }
+        return SizedBox(
+          width: 420,
+          child: SingleChildScrollView(
+            child: DataTable(
+              columnSpacing: 24,
+              columns: [
+                DataColumn(label: Text(translate('Username'))),
+                DataColumn(label: Text(translate('IP'))),
+              ],
+              rows: list
+                  .map((s) => DataRow(cells: [
+                        DataCell(Text(
+                            s.peerName.isEmpty ? s.peerId : s.peerName)),
+                        DataCell(Text(s.ip.isEmpty ? '-' : s.ip)),
+                      ]))
+                  .toList(),
+            ),
+          ),
+        );
+      }),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(ctx).pop(),
+          child: Text(translate('OK')),
+        ),
+      ],
+    ),
+  );
+}
+
 String toCapitalized(String s) {
   if (s.isEmpty) {
     return s;

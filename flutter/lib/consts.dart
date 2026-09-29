@@ -105,6 +105,11 @@ const String kOptionAutoDisconnectTimeout = "auto-disconnect-timeout";
 // stored value is exactly "Y".
 const String kOptionAllowAuditLog = "allow-audit-log";
 const String kOptionAuditLogPath = "audit-log-path";
+// Machine-level switch for the "X is controlling this device" tray
+// notification. Always off by default so a plain install stays quiet; the
+// status icon / badge / dialog are unaffected by it. The `allow-` prefix is
+// required for the default-off semantics (see option2bool()).
+const String kOptionAllowIncomingNotify = "allow-incoming-notify";
 const String kOptionEnableHwcodec = "enable-hwcodec";
 const String kOptionAllowAutoRecordIncoming = "allow-auto-record-incoming";
 const String kOptionAllowAutoRecordOutgoing = "allow-auto-record-outgoing";

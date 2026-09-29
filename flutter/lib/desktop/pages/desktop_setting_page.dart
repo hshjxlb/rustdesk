@@ -1002,6 +1002,7 @@ class _SafetyState extends State<_Safety> with AutomaticKeepAliveClientMixin {
                   _Card(title: 'ID', children: [changeId()]),
                 more(context),
                 logging(context),
+                incomingNotify(context),
               ]),
             ),
           ],
@@ -1446,10 +1447,14 @@ class _SafetyState extends State<_Safety> with AutomaticKeepAliveClientMixin {
                 controller: controller,
                 enabled: enabled && logOn,
                 onChanged: (_) => applyEnabled.value = true,
-                decoration: const InputDecoration(
-                  hintText: 'audit.log',
+                decoration: InputDecoration(
+                  // Show the machine-wide default so nobody has to guess
+                  // where the file lands when this field is left empty.
+                  hintText: Platform.isWindows
+                      ? r'C:\ProgramData\RustDesk\audit.log'
+                      : 'audit.log',
                   contentPadding:
-                      EdgeInsets.symmetric(vertical: 12, horizontal: 12),
+                      const EdgeInsets.symmetric(vertical: 12, horizontal: 12),
                 ),
               ).workaroundFreezeLinuxMint().marginOnly(right: 15),
             ),
@@ -1490,6 +1495,18 @@ class _SafetyState extends State<_Safety> with AutomaticKeepAliveClientMixin {
       _OptionCheckBox(context, 'Enable logging', kOptionAllowAuditLog,
           enabled: enabled, update: (_) => setState(() {})),
       tmpWrapper(),
+    ]);
+  }
+
+  incomingNotify(BuildContext context) {
+    bool enabled = !locked;
+    return _Card(title: 'Remote access notifications', children: [
+      // Machine-level option (isServer: true), read by the tray process to
+      // decide whether to pop the "X is controlling this device" toast.
+      // Off by default; the status-bar icon and its badge are always on.
+      _OptionCheckBox(
+          context, 'Notify me when someone connects', kOptionAllowIncomingNotify,
+          enabled: enabled, update: (_) => setState(() {})),
     ]);
   }
 

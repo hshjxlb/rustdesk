@@ -127,14 +127,22 @@ fn now_string() -> String {
         .to_string()
 }
 
-/// Append one already-formatted record. Every failure is downgraded to a
-/// warning: a full disk, a revoked directory or a path the user typo'd must not
-/// be able to break the connection whose event we are trying to record.
+/// Append one already-formatted record if logging is on. Every failure is
+/// downgraded to a warning: a full disk, a revoked directory or a path the
+/// user typo'd must not be able to break the connection whose event we are
+/// trying to record.
 pub fn write_line(event: &str) {
     if !is_enabled() {
         return;
     }
+    write_line_unchecked(event);
+}
 
+/// Append without consulting the stored flag. Used by `note_switch`, which
+/// runs right after the new flag value was persisted but must also record
+/// the switch being turned OFF — after which the gate above would block
+/// every write.
+fn write_line_unchecked(event: &str) {
     let path = resolve_path();
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() {
@@ -189,15 +197,28 @@ fn spawn_line(event: String) {
 }
 
 /// Called from the FFI layer when the user changes the "Enable logging"
-/// switch. Turning it ON pre-creates the directory and an empty file right
-/// away: the user sees the file appear the moment they tick the box (instead
-/// of only after the first event), and — on Windows — the UI process becomes
-/// the file's CREATOR OWNER, so both the user account and the SYSTEM service
-/// can append to it regardless of which process writes first.
+/// switch, AFTER the new value has been persisted. Turning it ON pre-creates
+/// the directory and an empty file right away: the user sees the file appear
+/// the moment they tick the box (instead of only after the first event),
+/// and — on Windows — the UI process becomes the file's CREATOR OWNER, so
+/// both the user account and the SYSTEM service can append to it regardless
+/// of which process writes first.
+///
+/// The switch event itself is also recorded (LOGGING_ENABLED /
+/// LOGGING_DISABLED): when logging was activated is audit-relevant on its
+/// own, and it gives immediate visible feedback that the file exists and is
+/// writable — tick the box, open the file, see the line.
 pub fn note_switch(raw_value: &str) {
-    if hbb_common::config::option2bool(OPTION_ALLOW_AUDIT_LOG, raw_value) {
+    let on = hbb_common::config::option2bool(OPTION_ALLOW_AUDIT_LOG, raw_value);
+    if on {
         ensure_file();
     }
+    let event = format!(
+        "LOGGING_{} | device_id={}",
+        if on { "ENABLED" } else { "DISABLED" },
+        Config::get_id()
+    );
+    std::thread::spawn(move || write_line_unchecked(&event));
 }
 
 /// Best-effort pre-creation of the log file. Never fatal.
@@ -241,6 +262,18 @@ pub fn account_name_from(raw: &str) -> String {
 /// Trim a caller-supplied account name, defaulting to `unknown` when empty.
 fn clean_account(name: &str) -> String {
     let trimmed = name.trim();
+    if trimmed.is_empty() {
+        "unknown".to_owned()
+    } else {
+        trimmed.to_owned()
+    }
+}
+
+/// Trim a peer address, defaulting to `unknown` when empty. The `ip` handed in
+/// is the controlled side's own view of the peer: the real remote address for
+/// direct / LAN sessions, and the address hbbs reported for relayed ones.
+fn clean_ip(ip: &str) -> String {
+    let trimmed = ip.trim();
     if trimmed.is_empty() {
         "unknown".to_owned()
     } else {
@@ -324,11 +357,15 @@ pub fn log_logout(account: &str) {
 
 /// Record an inbound connection to this machine (we are the controlled side).
 /// `peer_id` is the controlling machine's id; `account` is the API account
-/// signed in here at the moment the peer was let in (`none` if not signed in).
-pub fn log_incoming_connect(peer_id: &str, conn_type: &str, account: &str) {
+/// signed in here at the moment the peer was let in (`none` if not signed in);
+/// `ip` is the peer address as this machine sees it — the real remote address
+/// for a direct / LAN session, or the one hbbs reported for a relayed one (see
+/// `clean_ip`).
+pub fn log_incoming_connect(peer_id: &str, ip: &str, conn_type: &str, account: &str) {
     let event = format!(
-        "CONNECT_IN | peer={} | type={} | user={}",
+        "CONNECT_IN | peer={} | ip={} | type={} | user={}",
         peer_id,
+        clean_ip(ip),
         conn_type,
         clean_account(account)
     );
@@ -337,11 +374,13 @@ pub fn log_incoming_connect(peer_id: &str, conn_type: &str, account: &str) {
 
 /// Record that an inbound connection ended, including how long it lasted.
 /// `account` is the snapshot taken at connect time, so the two lines for one
-/// session always show the same user even if the sign-in changed meanwhile.
-pub fn log_incoming_disconnect(peer_id: &str, conn_type: &str, duration: &str, account: &str) {
+/// session always show the same user even if the sign-in changed meanwhile;
+/// `ip` comes from the same session-lifetime snapshot for the same reason.
+pub fn log_incoming_disconnect(peer_id: &str, ip: &str, conn_type: &str, duration: &str, account: &str) {
     let event = format!(
-        "DISCONNECT_IN | peer={} | type={} | user={} | duration={} | at={}",
+        "DISCONNECT_IN | peer={} | ip={} | type={} | user={} | duration={} | at={}",
         peer_id,
+        clean_ip(ip),
         conn_type,
         clean_account(account),
         duration,

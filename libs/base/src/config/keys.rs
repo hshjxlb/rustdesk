@@ -158,6 +158,11 @@ pub const OPTION_FLUTTER_CURRENT_AB_NAME: &str = "current-ab-name";
 pub const OPTION_ALLOW_REMOTE_CM_MODIFICATION: &str = "allow-remote-cm-modification";
 pub const OPTION_ALLOW_SYNC_CLIPBOARD_BETWEEN_SESSIONS: &str =
     "allow-sync-clipboard-between-sessions";
+/// Opt-in switch for the "X is controlling this device" tray notification.
+/// Deliberately uses the `allow-` prefix: `option2bool()` only treats `allow-*`
+/// as true when the stored value is exactly "Y", so an unset option reads as
+/// false. An `enable-` prefix would default to true (`value != "N"`).
+pub const OPTION_ALLOW_INCOMING_NOTIFY: &str = "allow-incoming-notify";
 
 pub const OPTION_PRINTER_INCOMING_JOB_ACTION: &str = "printer-incomming-job-action";
 pub const OPTION_PRINTER_ALLOW_AUTO_PRINT: &str = "allow-printer-auto-print";
@@ -370,6 +375,7 @@ pub const KEYS_BUILDIN_SETTINGS: &[&str] = &[
     OPTION_ENABLE_PERM_CHANGE_IN_ACCEPT_WINDOW,
     OPTION_HIDE_ELEVATE_BUTTON_IN_ACCEPT_WINDOW,
     OPTION_ALLOW_COMMAND_LINE_SETTINGS_WHEN_SETTINGS_DISABLED,
+    OPTION_ALLOW_INCOMING_NOTIFY,
 ];
 
 #[cfg(test)]

@@ -256,6 +256,21 @@ fn make_tray() -> hbb_common::ResultType<()> {
                         .as_mut()
                         .map(|t| t.set_tooltip(Some(tooltip(count))));
                 }
+                Data::PeerIncomingNotify(name) => {
+                    // Aliased import: `Duration` is already taken by
+                    // std::time::Duration at the top of this file.
+                    use tauri_winrt_notification::{
+                        Duration as ToastDuration, Sound, Toast,
+                    };
+                    let text = format!("{} {}", name, translate("is controlling this device"));
+                    Toast::new(Toast::POWERSHELL_APP_ID)
+                        .title(&crate::get_app_name())
+                        .text1(&text)
+                        .sound(Some(Sound::Default))
+                        .duration(ToastDuration::Short)
+                        .show()
+                        .ok();
+                }
                 _ => {}
             }
         }
@@ -266,6 +281,9 @@ fn make_tray() -> hbb_common::ResultType<()> {
 #[tokio::main(flavor = "current_thread")]
 async fn start_query_session_count(sender: std::sync::mpsc::Sender<Data>) {
     let mut last_count = 0;
+    // Peer ids seen on the previous poll, so we only notify about peers that
+    // just started controlling this machine.
+    let mut last_peers: Vec<String> = Vec::new();
     loop {
         if let Ok(mut c) = crate::ipc::connect(1000, "").await {
             let mut timer = crate::rustdesk_interval(tokio::time::interval(Duration::from_secs(1)));
@@ -284,12 +302,34 @@ async fn start_query_session_count(sender: std::sync::mpsc::Sender<Data>) {
                                     sender.send(Data::ControlledSessionCount(count)).ok();
                                 }
                             }
+                            Ok(Some(Data::ControlledSessionDetail(list))) => {
+                                let peer_ids: Vec<String> =
+                                    list.iter().map(|(id, _, _, _)| id.clone()).collect();
+                                // Notify only about peers that were not
+                                // connected on the previous poll. Disconnects
+                                // are intentionally silent. The switch is
+                                // machine-level (Config), matching the fact
+                                // that the service is the one that knows.
+                                if hbb_common::config::Config::get_bool_option(
+                                    keys::OPTION_ALLOW_INCOMING_NOTIFY,
+                                ) {
+                                    for (peer_id, peer_name, _, _) in list.iter() {
+                                        if !last_peers.contains(peer_id) {
+                                            sender
+                                                .send(Data::PeerIncomingNotify(peer_name.clone()))
+                                                .ok();
+                                        }
+                                    }
+                                }
+                                last_peers = peer_ids;
+                            }
                             _ => {}
                         }
                     }
 
                     _ = timer.tick() => {
                         c.send(&Data::ControlledSessionCount(0)).await.ok();
+                        c.send(&Data::ControlledSessionDetail(vec![])).await.ok();
                     }
                 }
             }

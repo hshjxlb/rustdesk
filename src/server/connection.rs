@@ -1240,6 +1240,7 @@ impl Connection {
         if let Some(started) = conn.audit_connected_at.take() {
             crate::audit_log::log_incoming_disconnect(
                 &conn.lr.my_id,
+                &conn.ip,
                 crate::audit_log::conn_type_label(conn.audit_conn_type_label()),
                 &crate::audit_log::format_duration(started.elapsed()),
                 &conn.audit_account,
@@ -1948,6 +1949,7 @@ impl Connection {
             self.session_key(),
             self.tx_from_authed.clone(),
             self.lr.clone(),
+            self.ip.clone(),
         ));
         self.session_last_recv_time = SESSIONS
             .lock()
@@ -1973,6 +1975,7 @@ impl Connection {
         self.audit_account = audit_account.clone();
         crate::audit_log::log_incoming_connect(
             &self.lr.my_id,
+            &self.ip,
             crate::audit_log::conn_type_label(self.audit_conn_type_label()),
             &audit_account,
         );
@@ -5603,6 +5606,29 @@ impl Connection {
         ALIVE_CONNS.lock().unwrap().clone()
     }
 
+    /// Snapshot of the currently authorized inbound connections, for the UI
+    /// status icon and the tray notification. Returns
+    /// `(peer_id, peer_name, ip, conn_type)` tuples.
+    ///
+    /// Only authorized connections are listed: an unauthorized connection is
+    /// one that is still sitting in the password prompt and is not yet
+    /// "remote controlling" this machine.
+    pub fn authed_conns_info() -> Vec<(String, String, String, String)> {
+        AUTHED_CONNS
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|c| {
+                (
+                    c.peer_id.clone(),
+                    c.peer_name.clone(),
+                    c.ip.clone(),
+                    c.conn_type.as_str().to_owned(),
+                )
+            })
+            .collect()
+    }
+
     #[cfg(windows)]
     fn portable_check(&mut self) {
         if self.portable.is_installed || !self.is_remote() || !self.keyboard {
@@ -6815,6 +6841,14 @@ pub struct AuthedConn {
     pub session_key: SessionKey,
     pub sender: mpsc::UnboundedSender<Data>,
     pub printer: bool,
+    // Peer identity, kept here so the UI can list who is currently
+    // controlling this machine. The controlling peer's display name comes
+    // from its own LoginRequest; the IP is the one seen on open (for a
+    // relayed session this is the controlling peer's public address as
+    // reported by hbbs, not the relay server's).
+    pub peer_id: String,
+    pub peer_name: String,
+    pub ip: String,
 }
 
 mod raii {
@@ -6863,6 +6897,7 @@ mod raii {
             session_key: SessionKey,
             sender: mpsc::UnboundedSender<Data>,
             lr: LoginRequest,
+            ip: String,
         ) -> Self {
             let printer = conn_type == crate::server::AuthConnType::Remote
                 && crate::is_support_remote_print(&lr.version)
@@ -6873,6 +6908,9 @@ mod raii {
                 session_key,
                 sender,
                 printer,
+                peer_id: lr.my_id.clone(),
+                peer_name: lr.my_name.clone(),
+                ip,
             });
             Self::check_wake_lock();
             use std::sync::Once;

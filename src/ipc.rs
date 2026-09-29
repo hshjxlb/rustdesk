@@ -407,6 +407,18 @@ pub enum Data {
     FileTransferLog((String, String)),
     #[cfg(windows)]
     ControlledSessionCount(usize),
+    /// Currently authorized inbound connections, as
+    /// `(peer_id, peer_name, ip, conn_type)` tuples.
+    ///
+    /// The UI sends an empty vec as a request; the service answers with the
+    /// real list. Used by the status icon / tray notification so the user can
+    /// see who is controlling this machine.
+    #[cfg(windows)]
+    ControlledSessionDetail(Vec<(String, String, String, String)>),
+    /// Internal tray-process signal: a peer with this display name just
+    /// started controlling this machine, show a notification.
+    #[cfg(windows)]
+    PeerIncomingNotify(String),
     CmErr(String),
     // CM-side file reading responses (Windows only)
     // These are sent from CM back to Connection when CM handles file reading
@@ -1106,6 +1118,16 @@ async fn handle(data: Data, stream: &mut Connection) {
                 stream
                     .send(&Data::ControlledSessionCount(
                         crate::Connection::alive_conns().len()
+                    ))
+                    .await
+            );
+        }
+        #[cfg(windows)]
+        Data::ControlledSessionDetail(_) => {
+            allow_err!(
+                stream
+                    .send(&Data::ControlledSessionDetail(
+                        crate::Connection::authed_conns_info()
                     ))
                     .await
             );

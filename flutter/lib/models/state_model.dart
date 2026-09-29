@@ -7,6 +7,28 @@ import './platform_model.dart';
 
 enum SvcStatus { notReady, connecting, ready }
 
+/// A peer currently controlling this machine (an authorized inbound session).
+class RemoteSession {
+  final String peerId;
+  final String peerName;
+  final String ip;
+  final String connType; // remote / file_transfer / port_forward / view_camera / terminal
+
+  RemoteSession({
+    required this.peerId,
+    required this.peerName,
+    required this.ip,
+    required this.connType,
+  });
+
+  factory RemoteSession.fromJson(Map<String, dynamic> json) => RemoteSession(
+        peerId: json['peer_id']?.toString() ?? '',
+        peerName: json['peer_name']?.toString() ?? '',
+        ip: json['ip']?.toString() ?? '',
+        connType: json['conn_type']?.toString() ?? '',
+      );
+}
+
 class StateGlobal {
   int _windowId = -1;
   final RxBool _fullscreen = false.obs;
@@ -19,6 +41,10 @@ class StateGlobal {
   final svcStatus = SvcStatus.notReady.obs;
   final RxInt videoConnCount = 0.obs;
   final RxBool isFocused = false.obs;
+  // Peers currently controlling this machine. Refreshed by the Rust side
+  // (see ui_interface.rs / REMOTE_SESSIONS) and pushed as the
+  // "remote_sessions" global event. Drives the toolbar icon badge.
+  final RxList<RemoteSession> remoteSessions = <RemoteSession>[].obs;
   // for mobile and web
   bool isInMainPage = true;
   bool isWebVisible = true;

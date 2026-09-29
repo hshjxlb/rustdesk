@@ -552,6 +552,11 @@ class _PeerTabPageState extends State<PeerTabPage>
   List<Widget> _landscapeRightActions(BuildContext context) {
     final model = Provider.of<PeerTabModel>(context);
     return [
+      // Who is controlling this machine right now: icon + count badge,
+      // click to list the peers (username + IP).
+      remoteIncomingIconBuilder(stateGlobal.remoteSessions,
+          onTap: () => showRemoteSessionsDialog(context))
+          .marginOnly(right: 10),
       const PeerSearchBar().marginOnly(right: 13),
       _createRefresh(
           index: PeerTabIndex.ab, loading: gFFI.abModel.currentAbLoading),

@@ -967,12 +967,6 @@ pub fn main_get_error() -> String {
 }
 
 pub fn main_set_option(key: String, value: String) {
-    // Local audit log: turning the switch on pre-creates the file (immediate
-    // feedback in the UI, and on Windows the UI process becomes the file's
-    // CREATOR OWNER so the SYSTEM service can always append to it later).
-    if key == crate::audit_log::OPTION_ALLOW_AUDIT_LOG {
-        crate::audit_log::note_switch(&value);
-    }
     #[cfg(target_os = "android")]
     {
         let is_permission_option = key.eq(keys::OPTION_ENABLE_CLIPBOARD)
@@ -1029,6 +1023,12 @@ pub fn main_set_option(key: String, value: String) {
         crate::common::test_rendezvous_server();
     } else {
         set_option(key, value.clone());
+    }
+    // Local audit log: runs AFTER the option is persisted, so `note_switch`
+    // resolves the freshly saved path, pre-creates the file when the switch
+    // goes on, and records the switch itself (LOGGING_ENABLED/DISABLED).
+    if key == crate::audit_log::OPTION_ALLOW_AUDIT_LOG {
+        crate::audit_log::note_switch(&value);
     }
 }
 
