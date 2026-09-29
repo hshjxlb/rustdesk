@@ -9,6 +9,14 @@ use std::sync::{Arc, Mutex};
 #[cfg(windows)]
 use std::time::Duration;
 
+/// AUMID (Application User Model ID) for incoming-notify toasts. Windows
+/// labels every toast with the identity behind this ID; the PowerShell AUMID
+/// the toast crate falls back to would make notifications show up as coming
+/// from "Windows PowerShell". Registering our own AUMID per user (see
+/// `ensure_toast_identity`) attributes the toast to the app instead.
+#[cfg(windows)]
+const TOAST_AUMID: &str = "RustDesk.IncomingNotify";
+
 pub fn start_tray() {
     if crate::ui_interface::get_builtin_option(keys::OPTION_HIDE_TRAY) == "Y" {
         #[cfg(not(target_os = "macos"))]
@@ -284,7 +292,13 @@ fn make_tray() -> hbb_common::ResultType<()> {
                         // Surface the result instead of swallowing it: a Toast
                         // that the shell refuses would otherwise look exactly
                         // like the feature not firing at all.
-                        match Toast::new(Toast::POWERSHELL_APP_ID)
+                        // Attribute the toast to RustDesk rather than to
+                        // "Windows PowerShell": the label Windows shows comes
+                        // from the AUMID registry entry, which we re-register
+                        // here (idempotent, HKCU, no admin needed) right
+                        // before every toast.
+                        ensure_toast_identity();
+                        match Toast::new(TOAST_AUMID)
                             .title(&crate::get_app_name())
                             .text1(&text)
                             .sound(Some(Sound::Default))
@@ -384,6 +398,30 @@ fn is_windows_server() -> bool {
     key.get_value::<String, _>("InstallationType")
         .map(|t| t.contains("Server"))
         .unwrap_or(false)
+}
+
+/// Registers `TOAST_AUMID` under `HKCU\SOFTWARE\Classes\AppUserModelId` with
+/// a friendly `DisplayName` — the classic way for unpackaged desktop apps to
+/// own their toast identity (no admin rights, no MSIX, no shortcut tricks).
+/// Idempotent: once the value exists, re-running it on every toast is a
+/// cheap no-op. Failure here is not fatal: the toast then shows with an
+/// unregistered identity and the existing balloon-tip fallback takes over
+/// if the shell refuses it.
+#[cfg(windows)]
+fn ensure_toast_identity() {
+    use winreg::enums::HKEY_CURRENT_USER;
+    let path = format!("SOFTWARE\\Classes\\AppUserModelId\\{}", TOAST_AUMID);
+    let hkcu = winreg::RegKey::predef(HKEY_CURRENT_USER);
+    match hkcu.create_subkey(&path) {
+        Ok((key, _)) => {
+            if let Err(e) = key.set_value("DisplayName", &crate::get_app_name()) {
+                log::warn!("incoming notify: failed to set toast DisplayName: {}", e);
+            }
+        }
+        Err(e) => {
+            log::warn!("incoming notify: failed to register toast AUMID: {}", e);
+        }
+    }
 }
 
 /// Balloon tip (the classic Shell_NotifyIcon `NIF_INFO` balloon) delivered
