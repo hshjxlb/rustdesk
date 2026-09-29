@@ -1235,10 +1235,11 @@ impl Connection {
         // Local audit log: close out the entry opened at authorization. Uses the
         // same "loop exited" moment as the upload above, and takes the stored
         // instant so a reconnect (which re-runs the loop) cannot log twice.
-        // The user is the connect-time snapshot, so both lines of one session
-        // always agree even if the sign-in changed meanwhile.
+        // `user=` is the remote peer's name from `lr`, which is constant for
+        // the whole connection, so both lines of one session always agree.
         if let Some(started) = conn.audit_connected_at.take() {
             crate::audit_log::log_incoming_disconnect(
+                &conn.lr.my_name,
                 &conn.lr.my_id,
                 &conn.ip,
                 crate::audit_log::conn_type_label(conn.audit_conn_type_label()),
@@ -1967,14 +1968,16 @@ impl Connection {
         self.post_conn_audit(audit);
         // Local audit log: an authorized inbound connection. Recorded here
         // rather than at TCP accept so the entry means "a peer was let in",
-        // matching the semantics of the `new` upload above. The API account
-        // signed in here is snapshotted so both lines of this session carry
-        // the same user; v7 — a session admitted without a sign-in is not
-        // logged at all (the audit layer drops the `none` snapshot).
+        // matching the semantics of the `new` upload above. v9 — `user=` is
+        // stamped with the CONTROLLING side's name (lr.my_name, the same name
+        // the accept dialog shows), so the line answers "who connected in";
+        // the API account signed in on this machine is only the v7 recording
+        // gate, snapshotted so both lines of this session decide together.
         self.audit_connected_at = Some(Instant::now());
         let audit_account = crate::audit_log::current_account();
         self.audit_account = audit_account.clone();
         crate::audit_log::log_incoming_connect(
+            &self.lr.my_name,
             &self.lr.my_id,
             &self.ip,
             crate::audit_log::conn_type_label(self.audit_conn_type_label()),

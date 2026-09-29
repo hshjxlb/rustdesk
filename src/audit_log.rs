@@ -15,10 +15,15 @@
 //!
 //! ```text
 //! 2026-09-28 10:09:25 | LOGIN | user=admin | device_id=123456789
-//! 2026-09-28 10:21:03 | CONNECT_IN | peer=987654321 | type=remote | user=admin
-//! 2026-09-28 10:35:41 | DISCONNECT_IN | peer=987654321 | type=remote | user=admin | duration=00:14:38
+//! 2026-09-28 10:21:03 | CONNECT_IN | user=Hshjxlb | peer=491230743 | ip=1.2.3.4 | type=remote
+//! 2026-09-28 10:35:41 | DISCONNECT_IN | user=Hshjxlb | peer=491230743 | ip=1.2.3.4 | type=remote | duration=00:14:38 | at=2026-09-28 10:35:41
 //! 2026-09-28 11:02:10 | LOGOUT | user=admin | device_id=123456789
 //! ```
+//!
+//! On CONNECT_IN / DISCONNECT_IN lines `user=` is the CONTROLLING side's
+//! name (what the accept dialog shows as "X 请求访问你的设备"), so the line
+//! answers "who connected in"; the local sign-in state only acts as the
+//! recording gate (v7). LOGIN / LOGOUT remain the local account's own events.
 //!
 //! Storage: the switch, the path and the mirrored account name live in the
 //! **machine-level** `Config` store, never in `LocalConfig`. On Windows the
@@ -369,49 +374,49 @@ pub fn log_logout(account: &str) {
 }
 
 /// Record an inbound connection to this machine (we are the controlled side).
-/// `peer_id` is the controlling machine's id; `account` is the API account
-/// signed in here at the moment the peer was let in; `ip` is the peer address
-/// as this machine sees it — the real remote address for a direct / LAN
-/// session, or the one hbbs reported for a relayed one (see `clean_ip`).
-///
-/// v7: sessions admitted without a successful API sign-in are NOT recorded.
-pub fn log_incoming_connect(peer_id: &str, ip: &str, conn_type: &str, account: &str) {
-    let Some(account) = signed_in_account(account) else {
+/// `peer_name` is the name the CONTROLLING side presents (its LoginRequest
+/// `my_name` — the same name the accept dialog shows), stamped as `user=` so
+/// the line answers "who connected in"; `peer_id` / `ip` identify and locate
+/// that peer. `account` is the API account signed in on THIS machine and only
+/// serves as the v7 recording gate: a session admitted here without a
+/// successful local sign-in is not recorded at all.
+pub fn log_incoming_connect(peer_name: &str, peer_id: &str, ip: &str, conn_type: &str, account: &str) {
+    if signed_in_account(account).is_none() {
         return;
-    };
+    }
     let event = format!(
-        "CONNECT_IN | peer={} | ip={} | type={} | user={}",
+        "CONNECT_IN | user={} | peer={} | ip={} | type={}",
+        clean_account(peer_name),
         peer_id,
         clean_ip(ip),
-        conn_type,
-        account
+        conn_type
     );
     spawn_line(event);
 }
 
 /// Record that an inbound connection ended, including how long it lasted.
-/// `account` is the snapshot taken at connect time, so the two lines for one
-/// session always show the same user even if the sign-in changed meanwhile;
-/// `ip` comes from the same session-lifetime snapshot for the same reason.
-///
-/// v7: sessions whose connect-time snapshot had no successful API sign-in are
-/// NOT recorded (the matching CONNECT_IN was skipped for the same reason).
+/// `peer_name` is the controlling side's name (stamped as `user=` right after
+/// the event, matching CONNECT_IN); the gate `account` is the local sign-in
+/// snapshot taken at connect time, so the two lines of one session are always
+/// recorded or skipped together; `ip` comes from the same session-lifetime
+/// snapshot for the same reason.
 pub fn log_incoming_disconnect(
+    peer_name: &str,
     peer_id: &str,
     ip: &str,
     conn_type: &str,
     duration: &str,
     account: &str,
 ) {
-    let Some(account) = signed_in_account(account) else {
+    if signed_in_account(account).is_none() {
         return;
-    };
+    }
     let event = format!(
-        "DISCONNECT_IN | peer={} | ip={} | type={} | user={} | duration={} | at={}",
+        "DISCONNECT_IN | user={} | peer={} | ip={} | type={} | duration={} | at={}",
+        clean_account(peer_name),
         peer_id,
         clean_ip(ip),
         conn_type,
-        account,
         duration,
         now_string()
     );
