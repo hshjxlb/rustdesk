@@ -429,19 +429,39 @@ fn ensure_toast_identity() {
 /// that still works on Windows Server, where WinRT toasts are unavailable.
 /// Runs detached so a slow PowerShell start can never stall the tray event
 /// loop; the helper process removes its own icon after 12 seconds.
+///
+/// Identity: on Win10/11 the Shell converts balloons to toasts and, when the
+/// owning process has no explicit AUMID, it generates one whose DisplayName
+/// comes from the process — for powershell.exe that is "Windows PowerShell"
+/// (our v4 toast fix did not cover this fallback path). So the helper sets
+/// `TOAST_AUMID` as its process AUMID before creating the NotifyIcon, makes
+/// sure the AUMID registry entry (DisplayName = app name) exists, and sets
+/// the NotifyIcon tooltip to the app name as an extra hint. If any of that
+/// fails, the balloon still goes out, only mislabeled as before.
 #[cfg(windows)]
 fn show_balloon_tip(title: &str, text: &str) {
     let esc = |s: &str| s.replace('\'', "''");
     let script = format!(
-        "Add-Type -AssemblyName System.Windows.Forms; \
+        "try {{ Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; \
+         public static class Aumid {{ [DllImport(\"shell32.dll\", PreserveSig=false)] \
+         public static extern void SetCurrentProcessExplicitAppUserModelID([MarshalAs(UnmanagedType.LPWStr)] string id); }}'; \
+         }} catch {{ }}; \
+         Add-Type -AssemblyName System.Windows.Forms; \
+         try {{ New-Item -Path 'HKCU:\\SOFTWARE\\Classes\\AppUserModelId\\{aumid}' -Force | Out-Null; \
+         Set-ItemProperty -Path 'HKCU:\\SOFTWARE\\Classes\\AppUserModelId\\{aumid}' -Name 'DisplayName' -Value '{app}'; \
+         }} catch {{ }}; \
+         try {{ [Aumid]::SetCurrentProcessExplicitAppUserModelID('{aumid}'); }} catch {{ }}; \
          $n = New-Object System.Windows.Forms.NotifyIcon; \
          $n.Icon = [System.Drawing.SystemIcons]::Information; \
+         $n.Text = '{app}'; \
          $n.Visible = $true; \
-         $n.ShowBalloonTip(10000, '{}', '{}', [System.Windows.Forms.ToolTipIcon]::Info); \
+         $n.ShowBalloonTip(10000, '{title}', '{text}', [System.Windows.Forms.ToolTipIcon]::Info); \
          Start-Sleep -Seconds 12; \
          $n.Dispose();",
-        esc(title),
-        esc(text)
+        aumid = TOAST_AUMID,
+        app = esc(&crate::get_app_name()),
+        title = esc(title),
+        text = esc(text)
     );
     std::thread::spawn(move || {
         use std::os::windows::process::CommandExt;
