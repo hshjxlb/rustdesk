@@ -1003,6 +1003,14 @@ pub fn main_set_option(key: String, value: String) {
         );
     }
 
+    // Local audit log: capture this BEFORE `key`/`value` are moved into `set_option`
+    // below. `String` is not `Copy`, so any later read of them would be a use-after-move
+    // (E0382). We only need the comparison result and a clone of the value here.
+    // The audit handling itself must still run AFTER the option is persisted, so
+    // `note_switch` resolves the freshly saved path and can pre-create the file.
+    let is_audit_log_option = key == crate::audit_log::OPTION_ALLOW_AUDIT_LOG;
+    let audit_value = value.clone();
+
     // If `is_allow_tls_fallback` and https proxy is used, we need to restart rendezvous mediator.
     // No need to check if https proxy is used, because this option does not change frequently
     // and restarting mediator is safe even https proxy is not used.
@@ -1027,8 +1035,8 @@ pub fn main_set_option(key: String, value: String) {
     // Local audit log: runs AFTER the option is persisted, so `note_switch`
     // resolves the freshly saved path, pre-creates the file when the switch
     // goes on, and records the switch itself (LOGGING_ENABLED/DISABLED).
-    if key == crate::audit_log::OPTION_ALLOW_AUDIT_LOG {
-        crate::audit_log::note_switch(&value);
+    if is_audit_log_option {
+        crate::audit_log::note_switch(&audit_value);
     }
 }
 

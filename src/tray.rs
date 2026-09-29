@@ -262,7 +262,11 @@ fn make_tray() -> hbb_common::ResultType<()> {
                     use tauri_winrt_notification::{
                         Duration as ToastDuration, Sound, Toast,
                     };
-                    let text = format!("{} {}", name, translate("is controlling this device"));
+                    let text = format!(
+                        "{} {}",
+                        name,
+                        translate("is controlling this device".to_string())
+                    );
                     Toast::new(Toast::POWERSHELL_APP_ID)
                         .title(&crate::get_app_name())
                         .text1(&text)
