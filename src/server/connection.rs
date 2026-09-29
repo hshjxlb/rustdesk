@@ -7995,6 +7995,11 @@ mod test {
             session_key,
             sender: mpsc::unbounded_channel().0,
             printer: false,
+            // Unused by the session-keeping logic under test; empty values are
+            // enough for the compiler and for these assertions.
+            peer_id: String::new(),
+            peer_name: String::new(),
+            ip: String::new(),
         };
         let mine = key(7, "peer");
         let remote = AuthConnType::Remote;

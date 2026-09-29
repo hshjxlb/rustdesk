@@ -159,6 +159,13 @@ fn write_line_unchecked(event: &str) {
 
     rotate_if_needed(&path);
 
+    // Windows Notepad (including the one shipped with Windows Server and
+    // older Win10 builds) does not treat a bare LF as a line break — an
+    // LF-only file shows up as one glued line. CRLF is the only ending it
+    // renders reliably, so Windows gets CRLF; other platforms keep LF.
+    #[cfg(windows)]
+    let line = format!("{} | {}\r\n", now_string(), event);
+    #[cfg(not(windows))]
     let line = format!("{} | {}\n", now_string(), event);
     match OpenOptions::new().create(true).append(true).open(&path) {
         Ok(mut file) => {
