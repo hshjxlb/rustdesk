@@ -1275,12 +1275,12 @@ pub fn main_set_local_option(key: String, value: String) {
                 let account = crate::audit_log::account_name_from(&raw);
                 crate::audit_log::log_login(&account);
             }
-            // non-empty -> empty: sign-out. The store no longer holds the
-            // name, so parse the pre-write snapshot instead.
-            (false, true) => {
-                let account = crate::audit_log::account_name_from(&old_raw);
-                crate::audit_log::log_logout(&account);
-            }
+            // non-empty -> empty: the store was cleared. This is only a
+            // fallback sign-out signal: Flutter's logOut() also calls
+            // main_audit_logout() explicitly, so recording here as well would
+            // duplicate the line. The mirror sync below still runs, which is
+            // what clears the account stamped on later inbound connections.
+            (false, true) => {}
             // non-empty -> non-empty (periodic currentUser refresh, same-value
             // rewrite) or empty -> empty: not a sign-in / sign-out event.
             _ => {}
@@ -1299,6 +1299,23 @@ pub fn main_set_local_option(key: String, value: String) {
         };
         crate::audit_log::sync_account(&mirrored);
     }
+}
+
+/// Record an explicit sign-out, called from Flutter's `UserModel.logOut()`.
+///
+/// The `user_info` transition above only fires when the value actually went
+/// from non-empty to empty, which misses sign-outs where no `user_info` was
+/// ever persisted — most visibly OIDC with "remember me" unchecked, where the
+/// user *was* signed in (LOGIN was recorded from the auth response) but the
+/// store stayed empty, so signing out produced no transition and no LOGOUT.
+///
+/// `account` is the name the UI still holds at sign-out time (`unknown` when
+/// it has none).
+pub fn main_audit_logout(account: String) {
+    crate::audit_log::log_logout(&account);
+    // The session is over: clear the mirror so inbound connections admitted
+    // after this point are not stamped with the previous account.
+    crate::audit_log::sync_account("");
 }
 
 // We do use use `main_get_local_option` and `main_set_local_option`.

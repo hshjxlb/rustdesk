@@ -184,6 +184,15 @@ class UserModel {
     } catch (e) {
       debugPrint("request /api/logout failed: err=$e");
     } finally {
+      // Local audit log: record the sign-out explicitly. The `user_info`
+      // transition only fires when a stored value existed, which misses OIDC
+      // sign-ins that skipped "remember me"; this carries the name the UI
+      // still holds, so every sign-out is recorded exactly once.
+      try {
+        await bind.mainAuditLogout(account: userName.value);
+      } catch (e) {
+        debugPrint("audit logout failed: err=$e");
+      }
       await reset(resetOther: true);
       gFFI.dialogManager.dismissByTag(tag);
     }

@@ -267,13 +267,21 @@ fn make_tray() -> hbb_common::ResultType<()> {
                         name,
                         translate("is controlling this device".to_string())
                     );
-                    Toast::new(Toast::POWERSHELL_APP_ID)
+                    // Surface the result instead of swallowing it: a Toast that
+                    // the shell refuses (notifications disabled for this app,
+                    // Focus Assist, or a Windows edition that drops the
+                    // PowerShell AUMID) would otherwise look exactly like the
+                    // feature not firing at all.
+                    match Toast::new(Toast::POWERSHELL_APP_ID)
                         .title(&crate::get_app_name())
                         .text1(&text)
                         .sound(Some(Sound::Default))
                         .duration(ToastDuration::Short)
                         .show()
-                        .ok();
+                    {
+                        Ok(()) => log::info!("incoming notify: toast shown for {:?}", name),
+                        Err(e) => log::warn!("incoming notify: toast failed for {:?}: {}", name, e),
+                    }
                 }
                 _ => {}
             }
