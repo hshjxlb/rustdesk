@@ -267,20 +267,39 @@ fn make_tray() -> hbb_common::ResultType<()> {
                         name,
                         translate("is controlling this device".to_string())
                     );
-                    // Surface the result instead of swallowing it: a Toast that
-                    // the shell refuses (notifications disabled for this app,
-                    // Focus Assist, or a Windows edition that drops the
-                    // PowerShell AUMID) would otherwise look exactly like the
-                    // feature not firing at all.
-                    match Toast::new(Toast::POWERSHELL_APP_ID)
-                        .title(&crate::get_app_name())
-                        .text1(&text)
-                        .sound(Some(Sound::Default))
-                        .duration(ToastDuration::Short)
-                        .show()
-                    {
-                        Ok(()) => log::info!("incoming notify: toast shown for {:?}", name),
-                        Err(e) => log::warn!("incoming notify: toast failed for {:?}: {}", name, e),
+                    // Windows Server editions have no toast notification
+                    // support at all: Toast::show() either errors or silently
+                    // no-ops, which looks exactly like the feature not firing.
+                    // Go straight to the Shell balloon tip there; on client
+                    // editions keep the nicer toast and fall back to the
+                    // balloon when the shell refuses it (app notifications
+                    // disabled, Focus Assist, unknown AUMID, ...).
+                    if is_windows_server() {
+                        log::info!(
+                            "incoming notify: server SKU, using balloon tip for {:?}",
+                            name
+                        );
+                        show_balloon_tip(&crate::get_app_name(), &text);
+                    } else {
+                        // Surface the result instead of swallowing it: a Toast
+                        // that the shell refuses would otherwise look exactly
+                        // like the feature not firing at all.
+                        match Toast::new(Toast::POWERSHELL_APP_ID)
+                            .title(&crate::get_app_name())
+                            .text1(&text)
+                            .sound(Some(Sound::Default))
+                            .duration(ToastDuration::Short)
+                            .show()
+                        {
+                            Ok(()) => log::info!("incoming notify: toast shown for {:?}", name),
+                            Err(e) => {
+                                log::warn!(
+                                    "incoming notify: toast failed for {:?}: {}, falling back to balloon tip",
+                                    name, e
+                                );
+                                show_balloon_tip(&crate::get_app_name(), &text);
+                            }
+                        }
                     }
                 }
                 _ => {}
@@ -348,6 +367,66 @@ async fn start_query_session_count(sender: std::sync::mpsc::Sender<Data>) {
         }
         hbb_common::sleep(1.).await;
     }
+}
+
+/// True on Windows Server editions (InstallationType contains "Server").
+/// Server SKUs have no toast notification infrastructure, so the tray falls
+/// back to a Shell balloon tip there. Unknown registry state reports
+/// "not a server" and keeps the toast path.
+#[cfg(windows)]
+fn is_windows_server() -> bool {
+    use winreg::enums::HKEY_LOCAL_MACHINE;
+    let Ok(key) = winreg::RegKey::predef(HKEY_LOCAL_MACHINE)
+        .open_subkey("SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion")
+    else {
+        return false;
+    };
+    key.get_value::<String, _>("InstallationType")
+        .map(|t| t.contains("Server"))
+        .unwrap_or(false)
+}
+
+/// Balloon tip (the classic Shell_NotifyIcon `NIF_INFO` balloon) delivered
+/// through a transient PowerShell `NotifyIcon`. This is the notification path
+/// that still works on Windows Server, where WinRT toasts are unavailable.
+/// Runs detached so a slow PowerShell start can never stall the tray event
+/// loop; the helper process removes its own icon after 12 seconds.
+#[cfg(windows)]
+fn show_balloon_tip(title: &str, text: &str) {
+    let esc = |s: &str| s.replace('\'', "''");
+    let script = format!(
+        "Add-Type -AssemblyName System.Windows.Forms; \
+         $n = New-Object System.Windows.Forms.NotifyIcon; \
+         $n.Icon = [System.Drawing.SystemIcons]::Information; \
+         $n.Visible = $true; \
+         $n.ShowBalloonTip(10000, '{}', '{}', [System.Windows.Forms.ToolTipIcon]::Info); \
+         Start-Sleep -Seconds 12; \
+         $n.Dispose();",
+        esc(title),
+        esc(text)
+    );
+    std::thread::spawn(move || {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        match std::process::Command::new("powershell")
+            .args(["-NoProfile", "-Command", &script])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+        {
+            Ok(out) if out.status.success() => {
+                log::info!("incoming notify: balloon tip shown");
+            }
+            Ok(out) => {
+                log::warn!(
+                    "incoming notify: balloon tip failed: {}",
+                    String::from_utf8_lossy(&out.stderr).trim()
+                );
+            }
+            Err(e) => {
+                log::warn!("incoming notify: balloon tip failed to launch: {}", e);
+            }
+        }
+    });
 }
 
 fn load_icon_from_asset() -> Option<image::DynamicImage> {
