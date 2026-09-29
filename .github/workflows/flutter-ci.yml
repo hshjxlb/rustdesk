@@ -6,16 +6,21 @@ on:
     paths-ignore:
     - "docs/**"
     - "README.md"
-  push:
-    branches:
-      - master
-    paths-ignore:
-      - ".github/**"
-      - "docs/**"
-      - "README.md"
-      - "res/**"
-      - "appimage/**"
-      - "flatpak/**"
+  # NOTE (fork): `push` trigger removed on purpose.
+  # Pushing a tag used to also fire this 19-job workflow for master, which
+  # exhausted the free-tier job concurrency pool and left the real tag build
+  # (Flutter Tag Build) stuck in `queued`. PR + manual dispatch is enough.
+  # Upstream original:
+  # push:
+  #   branches:
+  #     - master
+  #   paths-ignore:
+  #     - ".github/**"
+  #     - "docs/**"
+  #     - "README.md"
+  #     - "res/**"
+  #     - "appimage/**"
+  #     - "flatpak/**"
 
 jobs:
   run-ci:

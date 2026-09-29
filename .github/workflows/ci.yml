@@ -13,16 +13,21 @@ on:
     paths-ignore:
       - "docs/**"
       - "README.md"
-  push:
-    branches:
-      - master
-    paths-ignore:
-      - ".github/**"
-      - "docs/**"
-      - "README.md"
-      - "res/**"
-      - "appimage/**"
-      - "flatpak/**"
+  # NOTE (fork): `push` trigger removed on purpose.
+  # Pushing a tag used to also fire a push run for master, stealing job
+  # concurrency slots from the real tag build (Flutter Tag Build), which then
+  # sat in `queued` for a long time. PR + manual dispatch is enough.
+  # Upstream original:
+  # push:
+  #   branches:
+  #     - master
+  #   paths-ignore:
+  #     - ".github/**"
+  #     - "docs/**"
+  #     - "README.md"
+  #     - "res/**"
+  #     - "appimage/**"
+  #     - "flatpak/**"
 
 jobs:
   # ensure_cargo_fmt:
