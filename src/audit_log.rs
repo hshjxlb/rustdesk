@@ -211,21 +211,15 @@ fn spawn_line(event: String) {
 /// both the user account and the SYSTEM service can append to it regardless
 /// of which process writes first.
 ///
-/// The switch event itself is also recorded (LOGGING_ENABLED /
-/// LOGGING_DISABLED): when logging was activated is audit-relevant on its
-/// own, and it gives immediate visible feedback that the file exists and is
-/// writable — tick the box, open the file, see the line.
+/// v7: the switch event itself is no longer written to the log — the file
+/// records account activity only (LOGIN / LOGOUT / authenticated
+/// CONNECT_IN / DISCONNECT_IN). The visible feedback for enabling is the
+/// file simply appearing.
 pub fn note_switch(raw_value: &str) {
     let on = hbb_common::config::option2bool(OPTION_ALLOW_AUDIT_LOG, raw_value);
     if on {
         ensure_file();
     }
-    let event = format!(
-        "LOGGING_{} | device_id={}",
-        if on { "ENABLED" } else { "DISABLED" },
-        Config::get_id()
-    );
-    std::thread::spawn(move || write_line_unchecked(&event));
 }
 
 /// Best-effort pre-creation of the log file. Never fatal.
@@ -288,10 +282,22 @@ fn clean_ip(ip: &str) -> String {
     }
 }
 
+/// Normalize the account snapshot attached to a connection. `None` means the
+/// session was admitted without a successful API sign-in; v7 does not log
+/// those sessions at all instead of recording `user=none` lines.
+fn signed_in_account(account: &str) -> Option<String> {
+    let trimmed = account.trim();
+    if trimmed.is_empty() || trimmed == "none" {
+        None
+    } else {
+        Some(trimmed.to_owned())
+    }
+}
+
 /// The API account signed in on this machine right now, for stamping
-/// connection lines. `none` when no one is logged in — connections are
-/// recorded regardless of sign-in state, so the field makes the state at
-/// connection time explicit instead of leaving it to be guessed.
+/// connection lines. `none` when no one is logged in — v7 skips recording
+/// sessions without a sign-in, so this snapshot decides both whether a
+/// session is logged and which user is stamped on its lines.
 ///
 /// Reads the `audit-account` mirror, NOT `user_info`: this runs inside the
 /// SYSTEM service on Windows, whose `LocalConfig` is a separate store that
@@ -364,17 +370,21 @@ pub fn log_logout(account: &str) {
 
 /// Record an inbound connection to this machine (we are the controlled side).
 /// `peer_id` is the controlling machine's id; `account` is the API account
-/// signed in here at the moment the peer was let in (`none` if not signed in);
-/// `ip` is the peer address as this machine sees it — the real remote address
-/// for a direct / LAN session, or the one hbbs reported for a relayed one (see
-/// `clean_ip`).
+/// signed in here at the moment the peer was let in; `ip` is the peer address
+/// as this machine sees it — the real remote address for a direct / LAN
+/// session, or the one hbbs reported for a relayed one (see `clean_ip`).
+///
+/// v7: sessions admitted without a successful API sign-in are NOT recorded.
 pub fn log_incoming_connect(peer_id: &str, ip: &str, conn_type: &str, account: &str) {
+    let Some(account) = signed_in_account(account) else {
+        return;
+    };
     let event = format!(
         "CONNECT_IN | peer={} | ip={} | type={} | user={}",
         peer_id,
         clean_ip(ip),
         conn_type,
-        clean_account(account)
+        account
     );
     spawn_line(event);
 }
@@ -383,13 +393,25 @@ pub fn log_incoming_connect(peer_id: &str, ip: &str, conn_type: &str, account: &
 /// `account` is the snapshot taken at connect time, so the two lines for one
 /// session always show the same user even if the sign-in changed meanwhile;
 /// `ip` comes from the same session-lifetime snapshot for the same reason.
-pub fn log_incoming_disconnect(peer_id: &str, ip: &str, conn_type: &str, duration: &str, account: &str) {
+///
+/// v7: sessions whose connect-time snapshot had no successful API sign-in are
+/// NOT recorded (the matching CONNECT_IN was skipped for the same reason).
+pub fn log_incoming_disconnect(
+    peer_id: &str,
+    ip: &str,
+    conn_type: &str,
+    duration: &str,
+    account: &str,
+) {
+    let Some(account) = signed_in_account(account) else {
+        return;
+    };
     let event = format!(
         "DISCONNECT_IN | peer={} | ip={} | type={} | user={} | duration={} | at={}",
         peer_id,
         clean_ip(ip),
         conn_type,
-        clean_account(account),
+        account,
         duration,
         now_string()
     );

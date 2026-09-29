@@ -2205,9 +2205,12 @@ async fn key_exchange(conn: &mut Stream, key: &str, log_on_success: bool) -> Res
     Ok(false)
 }
 
-pub async fn secure_tcp(conn: &mut Stream, key: &str) -> ResultType<()> {
-    return Ok(());
-    secure_tcp_impl(conn, key, true).await
+pub async fn secure_tcp(_conn: &mut Stream, _key: &str) -> ResultType<()> {
+    // Deliberately a no-op (fork commit 5768fd9f1): performing the handshake
+    // here broke third-party API logins. Callers keep passing the stream and
+    // key so the call sites do not change. The exchange still runs for the
+    // callers that require it — see `secure_tcp_required` / `secure_tcp_silent`.
+    Ok(())
 }
 
 async fn secure_tcp_silent(conn: &mut Stream, key: &str) -> ResultType<()> {

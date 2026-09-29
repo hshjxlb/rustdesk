@@ -1033,8 +1033,8 @@ pub fn main_set_option(key: String, value: String) {
         set_option(key, value.clone());
     }
     // Local audit log: runs AFTER the option is persisted, so `note_switch`
-    // resolves the freshly saved path, pre-creates the file when the switch
-    // goes on, and records the switch itself (LOGGING_ENABLED/DISABLED).
+    // resolves the freshly saved path and pre-creates the file when the
+    // switch goes on (v7: the switch event itself is no longer logged).
     if is_audit_log_option {
         crate::audit_log::note_switch(&audit_value);
     }

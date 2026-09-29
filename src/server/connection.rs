@@ -1969,7 +1969,8 @@ impl Connection {
         // rather than at TCP accept so the entry means "a peer was let in",
         // matching the semantics of the `new` upload above. The API account
         // signed in here is snapshotted so both lines of this session carry
-        // the same user, recorded regardless of sign-in state.
+        // the same user; v7 — a session admitted without a sign-in is not
+        // logged at all (the audit layer drops the `none` snapshot).
         self.audit_connected_at = Some(Instant::now());
         let audit_account = crate::audit_log::current_account();
         self.audit_account = audit_account.clone();
