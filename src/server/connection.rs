@@ -419,11 +419,6 @@ pub struct Connection {
     // When this inbound connection became authorized. Drives the duration in
     // the local audit log; set once, at the point the peer is let in.
     audit_connected_at: Option<Instant>,
-    // API account signed in on this machine at the moment the peer was let in
-    // ("none" if not signed in). Snapshot: the sign-in state may change while
-    // the connection is open, and the CONNECT_IN / DISCONNECT_IN pair for one
-    // session must show the same user.
-    audit_account: String,
     chat_unanswered: bool,
     file_transferred: bool,
     #[cfg(windows)]
@@ -630,7 +625,6 @@ impl Connection {
             peer_argb: 0u32,
             session_last_recv_time: None,
             audit_connected_at: None,
-            audit_account: "".to_owned(),
             chat_unanswered: false,
             file_transferred: false,
             #[cfg(windows)]
@@ -1244,7 +1238,6 @@ impl Connection {
                 &conn.ip,
                 crate::audit_log::conn_type_label(conn.audit_conn_type_label()),
                 &crate::audit_log::format_duration(started.elapsed()),
-                &conn.audit_account,
             );
         }
         if let Some(s) = conn.server.upgrade() {
@@ -1970,18 +1963,15 @@ impl Connection {
         // rather than at TCP accept so the entry means "a peer was let in",
         // matching the semantics of the `new` upload above. v9 — `user=` is
         // stamped with the CONTROLLING side's name (lr.my_name, the same name
-        // the accept dialog shows), so the line answers "who connected in";
-        // the API account signed in on this machine is only the v7 recording
-        // gate, snapshotted so both lines of this session decide together.
+        // the accept dialog shows), so the line answers "who connected in".
+        // v13 — every admitted session is recorded; the old sign-in gate is
+        // gone (it kept the log empty on machines that never sign in).
         self.audit_connected_at = Some(Instant::now());
-        let audit_account = crate::audit_log::current_account();
-        self.audit_account = audit_account.clone();
         crate::audit_log::log_incoming_connect(
             &self.lr.my_name,
             &self.lr.my_id,
             &self.ip,
             crate::audit_log::conn_type_label(self.audit_conn_type_label()),
-            &audit_account,
         );
         #[allow(unused_mut)]
         let mut username = crate::platform::get_active_username();

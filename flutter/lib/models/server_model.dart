@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io' show Platform;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_hbb/consts.dart';
@@ -126,6 +127,25 @@ class ServerModel with ChangeNotifier {
 
   List<Client> get clients => _clients;
 
+  /// Whether the CM window may be shown automatically right now.
+  ///
+  /// Linux special case: automatically showing (and focusing) the CM window
+  /// for an already-authorized connection triggers GNOME Shell's
+  /// focus-stealing prevention, which answers every denied focus request
+  /// with a `"<peer> - RustDesk" is ready` notification. So on Linux the
+  /// window only comes up when a client is actually waiting for approval;
+  /// sessions let in by password / whitelist stay hidden until the user
+  /// opens the window themselves. Other platforms keep upstream behavior.
+  ///
+  /// With [client] set (a connection just arrived) the decision is made for
+  /// that client alone; without it, for any pending-approval client.
+  bool _cmShouldAutoShow({Client? client}) {
+    if (hideCm) return false;
+    if (!Platform.isLinux) return true;
+    if (client != null) return !client.authorized;
+    return _clients.any((c) => !c.authorized);
+  }
+
   final controller = ScrollController();
 
   WeakReference<FFI> parent;
@@ -170,7 +190,7 @@ class ServerModel with ChangeNotifier {
             }
           } else {
             _zeroClientLengthCounter = 0;
-            if (!hideCm) showCmWindow();
+            if (_cmShouldAutoShow()) showCmWindow();
           }
         }
       }
@@ -512,7 +532,7 @@ class ServerModel with ChangeNotifier {
     if (desktopType == DesktopType.cm) {
       if (_clients.isEmpty) {
         hideCmWindow();
-      } else if (!hideCm) {
+      } else if (_cmShouldAutoShow()) {
         showCmWindow();
       }
     }
@@ -556,7 +576,7 @@ class ServerModel with ChangeNotifier {
         _clients.removeAt(index_disconnected);
         tabController.remove(index_disconnected);
       }
-      if (desktopType == DesktopType.cm && !hideCm) {
+      if (desktopType == DesktopType.cm && _cmShouldAutoShow(client: client)) {
         showCmWindow();
       }
       scrollToBottom();
@@ -576,7 +596,11 @@ class ServerModel with ChangeNotifier {
         onTap: () {},
         page: desktop.buildConnectionCard(client)));
     Future.delayed(Duration.zero, () async {
-      if (!hideCm) windowOnTop(null);
+      // Linux: raising + focusing the CM window per tab is what fires the
+      // GNOME `"peer - RustDesk" is ready` notification. Visibility is
+      // handled by showCmWindow() (approval-needed clients only); never
+      // demand focus on our own here.
+      if (!hideCm && !Platform.isLinux) windowOnTop(null);
     });
     // Only do the hidden task when on Desktop.
     if (client.authorized && isDesktop) {

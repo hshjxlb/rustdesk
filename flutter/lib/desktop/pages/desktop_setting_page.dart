@@ -1450,9 +1450,13 @@ class _SafetyState extends State<_Safety> with AutomaticKeepAliveClientMixin {
                 decoration: InputDecoration(
                   // Show the machine-wide default so nobody has to guess
                   // where the file lands when this field is left empty.
+                  // Linux: the full default file under the user's home
+                  // (matches what the Rust side resolves, ~ supported).
                   hintText: Platform.isWindows
                       ? r'C:\ProgramData\RustDesk\audit.log'
-                      : 'audit.log',
+                      : Platform.isLinux
+                          ? '${Platform.environment['HOME'] ?? '~'}/RustDesk/audit.log'
+                          : 'audit.log',
                   contentPadding:
                       const EdgeInsets.symmetric(vertical: 12, horizontal: 12),
                 ),

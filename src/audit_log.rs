@@ -22,8 +22,11 @@
 //!
 //! On CONNECT_IN / DISCONNECT_IN lines `user=` is the CONTROLLING side's
 //! name (what the accept dialog shows as "X 请求访问你的设备"), so the line
-//! answers "who connected in"; the local sign-in state only acts as the
-//! recording gate (v7). LOGIN / LOGOUT remain the local account's own events.
+//! answers "who connected in" (v9). Every admitted session is recorded: the
+//! old v7 rule of skipping machines where nobody signed into an API account
+//! was dropped in v13, because on machines that never sign in (the common
+//! case) it kept the log empty forever. LOGIN / LOGOUT remain the local
+//! account's own events.
 //!
 //! Storage: the switch, the path and the mirrored account name live in the
 //! **machine-level** `Config` store, never in `LocalConfig`. On Windows the
@@ -76,7 +79,7 @@ const MAX_FILE_SIZE: u64 = 10 * 1024 * 1024;
 #[inline]
 pub fn is_enabled() -> bool {
     let enabled = Config::get_bool_option(OPTION_ALLOW_AUDIT_LOG);
-    log::debug!(
+    log::info!(
         "audit_log: is_enabled={} (option value='{}')",
         enabled,
         Config::get_option(OPTION_ALLOW_AUDIT_LOG)
@@ -90,13 +93,18 @@ pub fn is_enabled() -> bool {
 /// separator, or it already exists as one) the default file name is appended, so
 /// both "D:\logs" and "D:\logs\audit.log" do what the user meant. An empty
 /// configured value falls back to the default location (see `default_path`).
+///
+/// A leading `~` is expanded to the user's home (see `expand_tilde`) — Rust's
+/// `PathBuf` does not do this on its own, so a typed "~/RustDesk/audit.log"
+/// would otherwise create a literal `~` directory and "mysteriously" not
+/// produce a file where the user is looking for one.
 pub fn resolve_path() -> PathBuf {
     let configured = Config::get_option(OPTION_AUDIT_LOG_PATH);
     let trimmed = configured.trim();
     if trimmed.is_empty() {
         return default_path();
     }
-    let path = PathBuf::from(trimmed);
+    let path = expand_tilde(trimmed);
     let looks_like_dir = trimmed.ends_with('/')
         || trimmed.ends_with('\\')
         || path.is_dir();
@@ -104,6 +112,54 @@ pub fn resolve_path() -> PathBuf {
         path.join(DEFAULT_FILE_NAME)
     } else {
         path
+    }
+}
+
+/// Expand a leading `~` / `~/` / `~\` to the user's home directory.
+///
+/// Every other position of a tilde (inside the path, escaped-looking "~user"
+/// home shorthand) is left untouched: this is not a shell, and guessing more
+/// than the common "path starts with ~" case invites surprises. When no home
+/// can be determined the input is returned as-is.
+fn expand_tilde(path: &str) -> PathBuf {
+    if path == "~" {
+        return home_for_expansion().unwrap_or_else(|| PathBuf::from(path));
+    }
+    let rest = path
+        .strip_prefix("~/")
+        .or_else(|| path.strip_prefix("~\\"));
+    match rest {
+        Some(rest) => match home_for_expansion() {
+            Some(home) if rest.is_empty() => home,
+            Some(home) => home.join(rest),
+            None => PathBuf::from(path),
+        },
+        None => PathBuf::from(path),
+    }
+}
+
+/// The home directory used by both `default_path` and `expand_tilde`.
+///
+/// Same rule on Linux as in `default_path`: prefer the *active desktop user's*
+/// home (the inbound hooks run in the root service, where `$HOME` is `/root`)
+/// so the service and the UI process expand a configured path to the same
+/// file. Windows has no tilde tradition but `$USERPROFILE` still makes
+/// `~/logs/audit.log` work if someone types it.
+fn home_for_expansion() -> Option<PathBuf> {
+    #[cfg(windows)]
+    {
+        std::env::var_os("USERPROFILE")
+            .map(PathBuf::from)
+            .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
+    }
+    #[cfg(target_os = "linux")]
+    {
+        crate::platform::linux::get_active_user_home()
+            .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
+    {
+        std::env::var_os("HOME").map(PathBuf::from)
     }
 }
 
@@ -134,7 +190,10 @@ fn default_path() -> PathBuf {
         // process, which is the active user itself, resolves identically.
         let home = crate::platform::linux::get_active_user_home()
             .or_else(|| std::env::var_os("HOME").map(PathBuf::from));
-        log::debug!(
+        // info, not debug: this is the first place to look when the file does
+        // not appear where the user expects it, and the default level filters
+        // debug out.
+        log::info!(
             "audit_log: linux default_path: get_active_user_home={:?}, HOME env={:?}",
             crate::platform::linux::get_active_user_home(),
             std::env::var_os("HOME")
@@ -175,7 +234,7 @@ pub fn write_line(event: &str) {
 /// every write.
 fn write_line_unchecked(event: &str) {
     let path = resolve_path();
-    log::debug!("audit_log: attempting write to {:?}: {}", path, event);
+    log::info!("audit_log: attempting write to {:?}: {}", path, event);
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() {
             if let Err(e) = fs::create_dir_all(parent) {
@@ -284,6 +343,17 @@ pub fn ensure_file() {
     }
 }
 
+/// `ensure_file` but only when the switch is on. Called by the service
+/// whenever a fresh options map arrives over IPC: the UI process pre-creates
+/// the file when the switch is ticked, but if that run failed (odd home
+/// resolution, sandboxing, ...) the service retries with its own resolution,
+/// so "ticked the box, no file appeared" has a second chance to self-heal.
+pub fn ensure_file_if_enabled() {
+    if is_enabled() {
+        ensure_file();
+    }
+}
+
 /// Extract the account name from a raw `user_info` JSON string.
 ///
 /// Public because the FFI sign-out path must parse the *pre-write* snapshot:
@@ -326,22 +396,9 @@ fn clean_ip(ip: &str) -> String {
     }
 }
 
-/// Normalize the account snapshot attached to a connection. `None` means the
-/// session was admitted without a successful API sign-in; v7 does not log
-/// those sessions at all instead of recording `user=none` lines.
-fn signed_in_account(account: &str) -> Option<String> {
-    let trimmed = account.trim();
-    if trimmed.is_empty() || trimmed == "none" {
-        None
-    } else {
-        Some(trimmed.to_owned())
-    }
-}
-
-/// The API account signed in on this machine right now, for stamping
-/// connection lines. `none` when no one is logged in — v7 skips recording
-/// sessions without a sign-in, so this snapshot decides both whether a
-/// session is logged and which user is stamped on its lines.
+/// The API account signed in on this machine right now, or `none` when no
+/// one is logged in. Kept for diagnostics and future per-account stamping;
+/// connection lines themselves are written unconditionally since v13.
 ///
 /// Reads the `audit-account` mirror, NOT `user_info`: this runs inside the
 /// SYSTEM service on Windows, whose `LocalConfig` is a separate store that
@@ -462,13 +519,13 @@ pub fn take_explicit_logout() -> bool {
 /// `peer_name` is the name the CONTROLLING side presents (its LoginRequest
 /// `my_name` — the same name the accept dialog shows), stamped as `user=` so
 /// the line answers "who connected in"; `peer_id` / `ip` identify and locate
-/// that peer. `account` is the API account signed in on THIS machine and only
-/// serves as the v7 recording gate: a session admitted here without a
-/// successful local sign-in is not recorded at all.
-pub fn log_incoming_connect(peer_name: &str, peer_id: &str, ip: &str, conn_type: &str, account: &str) {
-    if signed_in_account(account).is_none() {
-        return;
-    }
+/// that peer.
+///
+/// v13: the v7 gate (record only when an API account is signed in on this
+/// machine) is removed. On machines that never sign in the gate swallowed
+/// every event, leaving an empty file behind a ticked switch; the only real
+/// gate is now the "Enable logging" switch itself, checked in `spawn_line`.
+pub fn log_incoming_connect(peer_name: &str, peer_id: &str, ip: &str, conn_type: &str) {
     let event = format!(
         "CONNECT_IN | user={} | peer={} | ip={} | type={}",
         clean_account(peer_name),
@@ -481,21 +538,15 @@ pub fn log_incoming_connect(peer_name: &str, peer_id: &str, ip: &str, conn_type:
 
 /// Record that an inbound connection ended, including how long it lasted.
 /// `peer_name` is the controlling side's name (stamped as `user=` right after
-/// the event, matching CONNECT_IN); the gate `account` is the local sign-in
-/// snapshot taken at connect time, so the two lines of one session are always
-/// recorded or skipped together; `ip` comes from the same session-lifetime
-/// snapshot for the same reason.
+/// the event, matching CONNECT_IN); `ip` comes from the same session-lifetime
+/// snapshot. See `log_incoming_connect` for why the v7 sign-in gate is gone.
 pub fn log_incoming_disconnect(
     peer_name: &str,
     peer_id: &str,
     ip: &str,
     conn_type: &str,
     duration: &str,
-    account: &str,
 ) {
-    if signed_in_account(account).is_none() {
-        return;
-    }
     let event = format!(
         "DISCONNECT_IN | user={} | peer={} | ip={} | type={} | duration={} | at={}",
         clean_account(peer_name),

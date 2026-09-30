@@ -1042,6 +1042,11 @@ async fn handle(data: Data, stream: &mut Connection) {
                     crate::privacy_mode::switch(v);
                 }
                 Config::set_options(value);
+                // Belt and suspenders for the audit log: the UI process
+                // pre-creates the file when the switch is ticked, but if that
+                // run failed or resolved a different home, the service retries
+                // here with its own resolution before the next event lands.
+                crate::audit_log::ensure_file_if_enabled();
                 allow_err!(stream.send(&Data::Options(None)).await);
             }
         },

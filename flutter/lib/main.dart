@@ -291,7 +291,13 @@ void runConnectionManagerScreen() async {
   );
   final hide = await bind.cmGetConfig(name: "hide_cm") == 'true';
   gFFI.serverModel.hideCm = hide;
-  if (hide) {
+  if (hide || Platform.isLinux) {
+    // On Linux the CM window must not pop up on its own: it appears right
+    // when a peer connects and its show() + focus() pair is refused by
+    // GNOME Shell's focus-stealing prevention, which answers every denied
+    // focus request with a `"id - RustDesk" is ready` notification.
+    // The window stays hidden at startup; ServerModel surfaces it only when
+    // a client is actually waiting for approval (see _cmShouldAutoShow).
     await hideCmWindow(isStartup: true);
   } else {
     await showCmWindow(isStartup: true);
