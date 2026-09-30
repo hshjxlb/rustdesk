@@ -277,16 +277,17 @@ fn make_tray() -> hbb_common::ResultType<()> {
                         use tauri_winrt_notification::{
                             Duration as ToastDuration, Sound, Toast,
                         };
-                        // Windows Server editions have no toast notification
-                        // support at all: Toast::show() either errors or silently
-                        // no-ops, which looks exactly like the feature not firing.
-                        // Go straight to the Shell balloon tip there; on client
-                        // editions keep the nicer toast and fall back to the
-                        // balloon when the shell refuses it (app notifications
-                        // disabled, Focus Assist, unknown AUMID, ...).
-                        if is_windows_server() {
+                        // Windows Server and IoT editions have no reliable toast
+                        // notification support: Toast::show() either errors or
+                        // silently no-ops on these SKUs, which looks exactly like
+                        // the feature not firing. Go straight to the Shell balloon
+                        // tip there; on standard client editions keep the nicer
+                        // toast and fall back to the balloon when the shell
+                        // refuses it (app notifications disabled, Focus Assist,
+                        // unknown AUMID, ...).
+                        if !should_use_toast_notification() {
                             log::info!(
-                                "incoming notify: server SKU, using balloon tip for {:?}",
+                                "incoming notify: server/IoT SKU, using balloon tip for {:?}",
                                 name
                             );
                             show_balloon_tip(&crate::get_app_name(), &text);
@@ -407,6 +408,35 @@ fn is_windows_server() -> bool {
         .unwrap_or(false)
 }
 
+/// True when the current Windows SKU should use WinRT Toast notifications.
+/// Returns false for Server editions (no toast infrastructure) and IoT
+/// editions (WinRT runtime may be incomplete or restricted), directing
+/// those SKUs straight to the more reliable Shell balloon tip path.
+#[cfg(windows)]
+fn should_use_toast_notification() -> bool {
+    // Server editions have no toast support at all
+    if is_windows_server() {
+        return false;
+    }
+    // Detect IoT editions (LTSC / Enterprise IoT / IoT Enterprise) —
+    // these report as "Client" in InstallationType but often lack the
+    // full WinRT runtime needed for Toast::show() to work reliably.
+    if let Ok(key) = winreg::RegKey::predef(HKEY_LOCAL_MACHINE)
+        .open_subkey("SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion")
+    {
+        if let Ok(product_name): Result<String, _> = key.get_value("ProductName") {
+            if product_name.contains("IoT") {
+                log::info!(
+                    "incoming notify: detected IoT edition ({}), using balloon tip",
+                    product_name
+                );
+                return false;
+            }
+        }
+    }
+    true  // Default: allow Toast on standard client Windows
+}
+
 /// Registers `TOAST_AUMID` under `HKCU\SOFTWARE\Classes\AppUserModelId` with
 /// a friendly `DisplayName` — the classic way for unpackaged desktop apps to
 /// own their toast identity (no admin rights, no MSIX, no shortcut tricks).
@@ -445,8 +475,35 @@ fn ensure_toast_identity() {
 /// sure the AUMID registry entry (DisplayName = app name) exists, and sets
 /// the NotifyIcon tooltip to the app name as an extra hint. If any of that
 /// fails, the balloon still goes out, only mislabeled as before.
+///
+/// On Server Core (no Explorer shell) this function logs a warning and
+/// returns immediately: there is no notification area for a balloon to
+/// appear in, and launching PowerShell would only produce a misleading
+/// "balloon tip shown" log entry.
+
+/// Check whether the current Windows session has an active Explorer shell
+/// (i.e. a taskbar / notification area exists). Server Core installations
+/// and some IoT configurations run without Explorer.
+#[cfg(windows)]
+fn has_desktop_shell() -> bool {
+    std::process::Command::new("tasklist")
+        .args(["/FI", "IMAGENAME eq explorer.exe", "/NH"])
+        .output()
+        .map(|out| String::from_utf8_lossy(&out.stdout).contains("explorer.exe"))
+        .unwrap_or(false)
+}
+
 #[cfg(windows)]
 fn show_balloon_tip(title: &str, text: &str) {
+    // No Explorer shell = no notification area = nowhere for the balloon to appear.
+    // Skip the PowerShell launch entirely rather than logging a misleading "shown".
+    if !has_desktop_shell() {
+        log::warn!(
+            "incoming notify: no desktop shell (explorer.exe not running), \
+             skipping balloon tip on this session"
+        );
+        return;
+    }
     let esc = |s: &str| s.replace('\'', "''");
     let script = format!(
         "try {{ Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; \

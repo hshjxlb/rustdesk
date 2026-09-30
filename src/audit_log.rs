@@ -75,7 +75,13 @@ const MAX_FILE_SIZE: u64 = 10 * 1024 * 1024;
 /// any I/O at all.
 #[inline]
 pub fn is_enabled() -> bool {
-    Config::get_bool_option(OPTION_ALLOW_AUDIT_LOG)
+    let enabled = Config::get_bool_option(OPTION_ALLOW_AUDIT_LOG);
+    log::debug!(
+        "audit_log: is_enabled={} (option value='{}')",
+        enabled,
+        Config::get_option(OPTION_ALLOW_AUDIT_LOG)
+    );
+    enabled
 }
 
 /// Resolve the file to append to.
@@ -128,6 +134,11 @@ fn default_path() -> PathBuf {
         // process, which is the active user itself, resolves identically.
         let home = crate::platform::linux::get_active_user_home()
             .or_else(|| std::env::var_os("HOME").map(PathBuf::from));
+        log::debug!(
+            "audit_log: linux default_path: get_active_user_home={:?}, HOME env={:?}",
+            crate::platform::linux::get_active_user_home(),
+            std::env::var_os("HOME")
+        );
         match home {
             Some(home) => home.join("RustDesk").join(DEFAULT_FILE_NAME),
             None => PathBuf::from("RustDesk").join(DEFAULT_FILE_NAME),
@@ -164,6 +175,7 @@ pub fn write_line(event: &str) {
 /// every write.
 fn write_line_unchecked(event: &str) {
     let path = resolve_path();
+    log::debug!("audit_log: attempting write to {:?}: {}", path, event);
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() {
             if let Err(e) = fs::create_dir_all(parent) {
