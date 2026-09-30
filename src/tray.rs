@@ -414,6 +414,7 @@ fn is_windows_server() -> bool {
 /// those SKUs straight to the more reliable Shell balloon tip path.
 #[cfg(windows)]
 fn should_use_toast_notification() -> bool {
+    use winreg::enums::HKEY_LOCAL_MACHINE;
     // Server editions have no toast support at all
     if is_windows_server() {
         return false;
@@ -424,7 +425,7 @@ fn should_use_toast_notification() -> bool {
     if let Ok(key) = winreg::RegKey::predef(HKEY_LOCAL_MACHINE)
         .open_subkey("SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion")
     {
-        if let Ok(product_name): Result<String, _> = key.get_value("ProductName") {
+        if let Ok(product_name) = key.get_value::<String, _>("ProductName") {
             if product_name.contains("IoT") {
                 log::info!(
                     "incoming notify: detected IoT edition ({}), using balloon tip",
@@ -461,6 +462,18 @@ fn ensure_toast_identity() {
     }
 }
 
+/// Check whether the current Windows session has an active Explorer shell
+/// (i.e. a taskbar / notification area exists). Server Core installations
+/// and some IoT configurations run without Explorer.
+#[cfg(windows)]
+fn has_desktop_shell() -> bool {
+    std::process::Command::new("tasklist")
+        .args(["/FI", "IMAGENAME eq explorer.exe", "/NH"])
+        .output()
+        .map(|out| String::from_utf8_lossy(&out.stdout).contains("explorer.exe"))
+        .unwrap_or(false)
+}
+
 /// Balloon tip (the classic Shell_NotifyIcon `NIF_INFO` balloon) delivered
 /// through a transient PowerShell `NotifyIcon`. This is the notification path
 /// that still works on Windows Server, where WinRT toasts are unavailable.
@@ -480,19 +493,6 @@ fn ensure_toast_identity() {
 /// returns immediately: there is no notification area for a balloon to
 /// appear in, and launching PowerShell would only produce a misleading
 /// "balloon tip shown" log entry.
-
-/// Check whether the current Windows session has an active Explorer shell
-/// (i.e. a taskbar / notification area exists). Server Core installations
-/// and some IoT configurations run without Explorer.
-#[cfg(windows)]
-fn has_desktop_shell() -> bool {
-    std::process::Command::new("tasklist")
-        .args(["/FI", "IMAGENAME eq explorer.exe", "/NH"])
-        .output()
-        .map(|out| String::from_utf8_lossy(&out.stdout).contains("explorer.exe"))
-        .unwrap_or(false)
-}
-
 #[cfg(windows)]
 fn show_balloon_tip(title: &str, text: &str) {
     // No Explorer shell = no notification area = nowhere for the balloon to appear.
