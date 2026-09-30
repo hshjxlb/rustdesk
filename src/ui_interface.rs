@@ -84,6 +84,10 @@ lazy_static::lazy_static! {
 #[cfg(target_os = "windows")]
 lazy_static::lazy_static! {
     pub static ref IS_FILE_TRANSFER_ENABLED: Arc<Mutex<Option<bool>>> = Arc::new(Mutex::new(None));
+}
+
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+lazy_static::lazy_static! {
     /// Last known set of authorized inbound connections, refreshed by
     /// `check_connect_status_` once a second. Drives the status icon badge and
     /// (via a pushed global event) the Flutter side.
