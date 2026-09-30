@@ -118,7 +118,22 @@ fn default_path() -> PathBuf {
             .join("RustDesk")
             .join(DEFAULT_FILE_NAME)
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
+    {
+        // Linux: `~/RustDesk/audit.log` under the home of the *active desktop
+        // user*, not `$HOME`. The inbound-connection hooks run inside the
+        // root service, where `$HOME` is `/root`; resolving from the active
+        // user instead keeps the service and the UI process writing to the
+        // same file (otherwise the log would silently split in two). The UI
+        // process, which is the active user itself, resolves identically.
+        let home = crate::platform::linux::get_active_user_home()
+            .or_else(|| std::env::var_os("HOME").map(PathBuf::from));
+        match home {
+            Some(home) => home.join("RustDesk").join(DEFAULT_FILE_NAME),
+            None => PathBuf::from("RustDesk").join(DEFAULT_FILE_NAME),
+        }
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
     {
         Config::path(DEFAULT_FILE_NAME)
     }
@@ -241,6 +256,18 @@ pub fn ensure_file() {
     if fs::metadata(&path).is_err() {
         if let Err(e) = OpenOptions::new().create(true).append(true).open(&path) {
             log::warn!("audit_log: cannot pre-create {:?}: {}", path, e);
+        }
+    }
+    // On Linux the file is shared between the root service and the desktop
+    // user: whoever creates it first must leave it appendable by the other,
+    // or half the events would fail with EACCES (and only show up as a
+    // warning in the service log).
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o666));
+        if let Some(parent) = path.parent() {
+            let _ = fs::set_permissions(parent, fs::Permissions::from_mode(0o777));
         }
     }
 }

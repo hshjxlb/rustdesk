@@ -1,12 +1,12 @@
 use crate::client::translate;
-#[cfg(windows)]
+#[cfg(any(target_os = "windows", target_os = "linux"))]
 use crate::ipc::Data;
-#[cfg(windows)]
+#[cfg(any(target_os = "windows", target_os = "linux"))]
 use hbb_common::tokio;
 use hbb_common::{allow_err, log};
 use base::config::keys;
 use std::sync::{Arc, Mutex};
-#[cfg(windows)]
+#[cfg(any(target_os = "windows", target_os = "linux"))]
 use std::time::Duration;
 
 /// AUMID (Application User Model ID) for incoming-notify toasts. Windows
@@ -108,7 +108,7 @@ fn make_tray() -> hbb_common::ResultType<()> {
 
     let menu_channel = MenuEvent::receiver();
     let tray_channel = TrayEvent::receiver();
-    #[cfg(windows)]
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
     let (ipc_sender, ipc_receiver) = std::sync::mpsc::channel::<Data>();
 
     let open_func = move || {
@@ -137,7 +137,7 @@ fn make_tray() -> hbb_common::ResultType<()> {
         }
     };
 
-    #[cfg(windows)]
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
     std::thread::spawn(move || {
         start_query_session_count(ipc_sender.clone());
     });
@@ -254,7 +254,7 @@ fn make_tray() -> hbb_common::ResultType<()> {
             }
         }
 
-        #[cfg(windows)]
+        #[cfg(any(target_os = "windows", target_os = "linux"))]
         if let Ok(data) = ipc_receiver.try_recv() {
             match data {
                 Data::ControlledSessionCount(count) => {
@@ -265,55 +265,62 @@ fn make_tray() -> hbb_common::ResultType<()> {
                         .map(|t| t.set_tooltip(Some(tooltip(count))));
                 }
                 Data::PeerIncomingNotify(name) => {
-                    // Aliased import: `Duration` is already taken by
-                    // std::time::Duration at the top of this file.
-                    use tauri_winrt_notification::{
-                        Duration as ToastDuration, Sound, Toast,
-                    };
                     let text = format!(
                         "{} {}",
                         name,
                         translate("is controlling this device".to_string())
                     );
-                    // Windows Server editions have no toast notification
-                    // support at all: Toast::show() either errors or silently
-                    // no-ops, which looks exactly like the feature not firing.
-                    // Go straight to the Shell balloon tip there; on client
-                    // editions keep the nicer toast and fall back to the
-                    // balloon when the shell refuses it (app notifications
-                    // disabled, Focus Assist, unknown AUMID, ...).
-                    if is_windows_server() {
-                        log::info!(
-                            "incoming notify: server SKU, using balloon tip for {:?}",
-                            name
-                        );
-                        show_balloon_tip(&crate::get_app_name(), &text);
-                    } else {
-                        // Surface the result instead of swallowing it: a Toast
-                        // that the shell refuses would otherwise look exactly
-                        // like the feature not firing at all.
-                        // Attribute the toast to RustDesk rather than to
-                        // "Windows PowerShell": the label Windows shows comes
-                        // from the AUMID registry entry, which we re-register
-                        // here (idempotent, HKCU, no admin needed) right
-                        // before every toast.
-                        ensure_toast_identity();
-                        match Toast::new(TOAST_AUMID)
-                            .title(&crate::get_app_name())
-                            .text1(&text)
-                            .sound(Some(Sound::Default))
-                            .duration(ToastDuration::Short)
-                            .show()
-                        {
-                            Ok(()) => log::info!("incoming notify: toast shown for {:?}", name),
-                            Err(e) => {
-                                log::warn!(
-                                    "incoming notify: toast failed for {:?}: {}, falling back to balloon tip",
-                                    name, e
-                                );
-                                show_balloon_tip(&crate::get_app_name(), &text);
+                    #[cfg(windows)]
+                    {
+                        // Aliased import: `Duration` is already taken by
+                        // std::time::Duration at the top of this file.
+                        use tauri_winrt_notification::{
+                            Duration as ToastDuration, Sound, Toast,
+                        };
+                        // Windows Server editions have no toast notification
+                        // support at all: Toast::show() either errors or silently
+                        // no-ops, which looks exactly like the feature not firing.
+                        // Go straight to the Shell balloon tip there; on client
+                        // editions keep the nicer toast and fall back to the
+                        // balloon when the shell refuses it (app notifications
+                        // disabled, Focus Assist, unknown AUMID, ...).
+                        if is_windows_server() {
+                            log::info!(
+                                "incoming notify: server SKU, using balloon tip for {:?}",
+                                name
+                            );
+                            show_balloon_tip(&crate::get_app_name(), &text);
+                        } else {
+                            // Surface the result instead of swallowing it: a Toast
+                            // that the shell refuses would otherwise look exactly
+                            // like the feature not firing at all.
+                            // Attribute the toast to RustDesk rather than to
+                            // "Windows PowerShell": the label Windows shows comes
+                            // from the AUMID registry entry, which we re-register
+                            // here (idempotent, HKCU, no admin needed) right
+                            // before every toast.
+                            ensure_toast_identity();
+                            match Toast::new(TOAST_AUMID)
+                                .title(&crate::get_app_name())
+                                .text1(&text)
+                                .sound(Some(Sound::Default))
+                                .duration(ToastDuration::Short)
+                                .show()
+                            {
+                                Ok(()) => log::info!("incoming notify: toast shown for {:?}", name),
+                                Err(e) => {
+                                    log::warn!(
+                                        "incoming notify: toast failed for {:?}: {}, falling back to balloon tip",
+                                        name, e
+                                    );
+                                    show_balloon_tip(&crate::get_app_name(), &text);
+                                }
                             }
                         }
+                    }
+                    #[cfg(target_os = "linux")]
+                    {
+                        show_desktop_notify(&crate::get_app_name(), &text, &name);
                     }
                 }
                 _ => {}
@@ -322,7 +329,7 @@ fn make_tray() -> hbb_common::ResultType<()> {
     });
 }
 
-#[cfg(windows)]
+#[cfg(any(target_os = "windows", target_os = "linux"))]
 #[tokio::main(flavor = "current_thread")]
 async fn start_query_session_count(sender: std::sync::mpsc::Sender<Data>) {
     let mut last_count = 0;
@@ -482,6 +489,53 @@ fn show_balloon_tip(title: &str, text: &str) {
             }
             Err(e) => {
                 log::warn!("incoming notify: balloon tip failed to launch: {}", e);
+            }
+        }
+    });
+}
+
+/// Linux desktop notification through `notify-send`, the libnotify CLI that
+/// ships with every mainstream desktop. `-a` sets the source label, so the
+/// bubble shows up as coming from RustDesk instead of from the process name.
+/// Runs detached so a slow DBus activation can never stall the tray event
+/// loop. No new dependency, no unsafe code: if the tray process has no
+/// `DBUS_SESSION_BUS_ADDRESS` (headless / minimal install) the command simply
+/// fails and the warning is logged — same policy as on Windows, where a
+/// refused notification is logged instead of swallowed silently.
+#[cfg(target_os = "linux")]
+fn show_desktop_notify(title: &str, text: &str, name: &str) {
+    let app = crate::get_app_name();
+    let title = title.to_owned();
+    let text = text.to_owned();
+    let name = name.to_owned();
+    std::thread::spawn(move || {
+        let args = [
+            "-a",
+            app.as_str(),
+            "-t",
+            "10000",
+            "--icon",
+            "rustdesk",
+            title.as_str(),
+            text.as_str(),
+        ];
+        match std::process::Command::new("notify-send").args(args).output() {
+            Ok(out) if out.status.success() => {
+                log::info!("incoming notify: desktop notification shown for {:?}", name);
+            }
+            Ok(out) => {
+                log::warn!(
+                    "incoming notify: notify-send failed for {:?}: {} (no DBUS_SESSION_BUS_ADDRESS or no desktop session)",
+                    name,
+                    String::from_utf8_lossy(&out.stderr).trim()
+                );
+            }
+            Err(e) => {
+                log::warn!(
+                    "incoming notify: notify-send is unavailable for {:?}: {}",
+                    name,
+                    e
+                );
             }
         }
     });

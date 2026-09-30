@@ -405,7 +405,9 @@ pub enum Data {
     #[cfg(windows)]
     SyncWinCpuUsage(Option<f64>),
     FileTransferLog((String, String)),
-    #[cfg(windows)]
+    /// Session count for the tray tooltip. Windows + Linux: the tray process
+    /// polls it there.
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
     ControlledSessionCount(usize),
     /// Currently authorized inbound connections, as
     /// `(peer_id, peer_name, ip, conn_type)` tuples.
@@ -413,11 +415,11 @@ pub enum Data {
     /// The UI sends an empty vec as a request; the service answers with the
     /// real list. Used by the status icon / tray notification so the user can
     /// see who is controlling this machine.
-    #[cfg(windows)]
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
     ControlledSessionDetail(Vec<(String, String, String, String)>),
     /// Internal tray-process signal: a peer with this display name just
     /// started controlling this machine, show a notification.
-    #[cfg(windows)]
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
     PeerIncomingNotify(String),
     CmErr(String),
     // CM-side file reading responses (Windows only)
@@ -1112,7 +1114,7 @@ async fn handle(data: Data, stream: &mut Connection) {
                     .await
             );
         }
-        #[cfg(windows)]
+        #[cfg(any(target_os = "windows", target_os = "linux"))]
         Data::ControlledSessionCount(_) => {
             allow_err!(
                 stream
@@ -1122,7 +1124,7 @@ async fn handle(data: Data, stream: &mut Connection) {
                     .await
             );
         }
-        #[cfg(windows)]
+        #[cfg(any(target_os = "windows", target_os = "linux"))]
         Data::ControlledSessionDetail(_) => {
             allow_err!(
                 stream

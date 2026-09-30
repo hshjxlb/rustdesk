@@ -1419,7 +1419,7 @@ async fn check_connect_status_(reconnect: bool, rx: mpsc::UnboundedReceiver<ipc:
                             Ok(Some(ipc::Data::ControlPermissionsRemoteModify(v))) => {
                                 *IS_REMOTE_MODIFY_ENABLED_BY_CONTROL_PERMISSIONS.lock().unwrap() = v;
                             }
-                            #[cfg(target_os = "windows")]
+                            #[cfg(any(target_os = "windows", target_os = "linux"))]
                             Ok(Some(ipc::Data::ControlledSessionDetail(list))) => {
                                 let changed = {
                                     let mut cur = REMOTE_SESSIONS.lock().unwrap();
@@ -1480,7 +1480,7 @@ async fn check_connect_status_(reconnect: bool, rx: mpsc::UnboundedReceiver<ipc:
                         c.send(&ipc::Data::ControlPermissionsRemoteModify(None)).await.ok();
                         #[cfg(target_os = "windows")]
                         c.send(&ipc::Data::FileTransferEnabledState(None)).await.ok();
-                        #[cfg(target_os = "windows")]
+                        #[cfg(any(target_os = "windows", target_os = "linux"))]
                         c.send(&ipc::Data::ControlledSessionDetail(vec![])).await.ok();
                     }
                 }
